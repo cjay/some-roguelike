@@ -1,3 +1,5 @@
+{-# LANGUAGE GADTs #-}
+
 module Behave where
 
 type Pos = (Int, Int)
