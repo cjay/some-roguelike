@@ -1,13 +1,15 @@
+{-# LANGUAGE RecordWildCards #-}
+
 module Main where
 
 import Dungeon
 import Data.Maybe
 import Control.Arrow
 import qualified Math.Geometry.GridMap as GridMap
-import FRP.Helm
-import qualified FRP.Helm.Time as Time
-import qualified FRP.Helm.Window as Window
-import qualified FRP.Helm.Keyboard as Keyboard
+import Helm
+import qualified Helm.Time as Time
+import qualified Helm.Window as Window
+import qualified Helm.Keyboard as Keyboard
 
 data GameState = GameState { at :: (Int, Int), lvl :: Level }
 
@@ -33,7 +35,7 @@ cellWidth = 20
 cellHeight :: Double
 cellHeight = 12
 
-render :: (Int, Int) -> Time -> GameState -> (Double, Double) -> Element
+render :: (Int, Int) -> Time.Time -> GameState -> (Double, Double) -> Element
 render (w, h) time GameState { .. } camPos =
   centeredCollage w h $ player : grid
   where

@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards, ScopedTypeVariables #-}
+
 module Dungeon where
 
 import Math.Geometry.GridMap.Lazy

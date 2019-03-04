@@ -2,18 +2,15 @@
 # For more information, see: http://docs.haskellstack.org/en/stable/yaml_configuration/
 
 # Specifies the GHC version and set of packages available (e.g., lts-3.5, nightly-2015-09-21, ghc-7.10.2)
-resolver: lts-5.5
+resolver: lts-11.13
 
 # Local packages, usually specified by relative directory name
 packages:
 - '.'
-- ../helm
 # Packages to be pulled from upstream that are not in the resolver (e.g., acme-missiles-0.3)
 extra-deps:
-- elerea-2.8.0
-- grid-7.8.5
-- reactive-banana-sdl2-0.1.1.0
-- reactive-banana-1.1.0.0
+- grid-7.8.9
+- helm-1.0.0
 
 # Override default flag values for local packages and extra-deps
 flags: {}
@@ -36,7 +33,10 @@ extra-package-dbs: []
 # extra-include-dirs: [/path/to/dir]
 # extra-lib-dirs: [/path/to/dir]
 extra-lib-dirs:
-- /usr/lib
+- /usr/local/lib
+
+extra-include-dirs:
+- /usr/local/include
 
 # Allow a newer minor version of GHC than the snapshot specifies
 # compiler-check: newer-minor
