@@ -1,25 +1,31 @@
-{-# LANGUAGE RecordWildCards, ScopedTypeVariables #-}
+{-# LANGUAGE RecordWildCards     #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
-module Dungeon where
+module Dungeon
+  ( Level
+  , execLevelGen
+  , rndLvl
+  , getCell
+  ) where
 
-import Math.Geometry.GridMap.Lazy
-import qualified Math.Geometry.GridMap as GridMap
-import Math.Geometry.Grid.Octagonal
-import Math.Geometry.Grid hiding (null)
-import Control.Monad.State.Strict
-import Control.Monad.Random.Class
-import Control.Monad.Random
-import Data.List
-import Safe
+import           Control.Monad.Random
+import           Control.Monad.Random.Class
+import           Control.Monad.State.Strict
+import           Data.List
+import qualified Math.Geometry.Grid           as Grid
+import           Math.Geometry.Grid.Octagonal (RectOctGrid, rectOctGrid)
+import qualified Math.Geometry.GridMap        as GridMap
+import           Math.Geometry.GridMap.Lazy   (LGridMap, lazyGridMap)
+import           Safe                         (headMay)
 
 data Object = At | Enemy | Loot deriving (Show, Eq)
 type Cell = Maybe [Object]
 type Level = LGridMap RectOctGrid Cell
 type LevelGen g a = RandT g (State Level) a
 
-data Rect = Rect { left :: Int
-                 , top :: Int
-                 , width :: Int
+data Rect = Rect { left   :: Int
+                 , top    :: Int
+                 , width  :: Int
                  , height :: Int
                  }
 getLeft :: Rect -> Int
@@ -28,7 +34,7 @@ getTop :: Rect -> Int
 getTop = top
 
 getCell :: Level -> (Int, Int) -> Cell
-getCell lvl idx = if lvl `contains` idx
+getCell lvl idx = if lvl `Grid.contains` idx
                   then lvl GridMap.! idx
                   else Nothing
 
@@ -57,7 +63,7 @@ dist ra rb = let (xa, ya) = center ra
 
 lvlTxt :: Level -> String
 lvlTxt lvl = unlines rows where
-    (w, h) = size lvl
+    (w, h) = Grid.size lvl
     rows = map renderLine [0 .. h-1]
     renderLine y = intersperse ' ' $ map (renderChar y) [0 .. w-1]
     renderChar y x =
@@ -74,7 +80,7 @@ eatCells cells = do
 
 rndLvl :: RandomGen g => Int -> Int -> Double -> LevelGen g [Rect]
 rndLvl minRoomEdge maxRoomEdge_ touchThresh = do
-  (w, h) <- size <$> get
+  (w, h) <- Grid.size <$> get
   descend (Rect 1 1 (w-2) (h-2))
    where
     -- something bigger than maxRoomEdge needs to be divisible without violating
