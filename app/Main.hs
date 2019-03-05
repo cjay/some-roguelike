@@ -1,11 +1,12 @@
-{-# LANGUAGE NamedFieldPuns  #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Main where
 
 import           Dungeon
 
 import           Control.Arrow
-import           Data.Maybe
+import           Data.List             (union, (\\))
+import           Data.Maybe            (isJust, isNothing)
 import           Linear.V2
 import qualified Math.Geometry.GridMap as GridMap
 
@@ -28,69 +29,98 @@ cellWidth = 20 :: Double
 cellHeight = 20 :: Double
 
 data GameState = GameState
-  { at  :: (Int, Int)
-  , lvl :: Level
+  { playerAt :: (Int, Int)
+  , lvl      :: Level
   }
 
 data Model = Model
-  { state   :: GameState
-  , cam     :: (Double, Double)
-  , winSize :: V2 Int
-  , time    :: Time
+  { state    :: GameState
+  , camAt    :: (Double, Double)
+  , winSize  :: V2 Int
+  , time     :: Time
+  , keysDown :: [Key]
+  , keysAccu :: [Key]
   }
 
 data Action
   = Idle
-  | Move (Int, Int)
+  | KeyDown Key
+  | KeyUp Key
   | Tick Time
   | WinSize (V2 Int)
 
 step :: (Int, Int) -> GameState -> GameState
-step (dx, dy) (state @ GameState { lvl, at = (x, y) }) =
+step (dx, dy) (state @ GameState { lvl, playerAt = (x, y) }) =
   let at' = (x + dx, y + dy) in
     if isNothing (lvl `getCell` at')
     then state
-    else state { at = at' }
+    else state { playerAt = at' }
 
 camStep :: GameState -> (Double, Double) -> (Double, Double)
-camStep GameState { at = (x, y) } (cx, cy) = (cx + rate/tickRate * (fromIntegral x - cx),
+camStep GameState { playerAt = (x, y) } (cx, cy) = (cx + rate/tickRate * (fromIntegral x - cx),
                                               cy + rate/tickRate * (fromIntegral y - cy))
     where rate = 2
 
-handleKey :: Key -> Action
-handleKey k = case k of
-  Keyboard.LeftKey  -> Move (-1, 0)
-  Keyboard.RightKey -> Move (1, 0)
-  Keyboard.UpKey    -> Move (0, -1)
-  Keyboard.DownKey  -> Move (0, 1)
-  _                 -> Idle
+keyToMotion :: Key -> V2 Int
+keyToMotion k = case k of
+  Keyboard.LeftKey  -> V2 (-1) 0
+  Keyboard.RightKey -> V2 1 0
+  Keyboard.UpKey    -> V2 0 (-1)
+  Keyboard.DownKey  -> V2 0 1
+  _                 -> V2 0 0
 
 view :: Model -> Helm.Graphics e
-view Model{ state = GameState {at, lvl}, cam = (cx, cy), winSize = V2 wx wy, time } =
+view Model{ state = GameState {playerAt, lvl}, camAt = (cx, cy), winSize = V2 wx wy, time } =
   Helm.Graphics2D $
   center (V2 (fromIntegral wx/2) (fromIntegral wy/2)) $
   collage $ grid ++ [player]
   where
     position x y = move $ V2 ((fromIntegral x - cx) * cellWidth)
                              ((fromIntegral y - cy) * cellHeight)
-    player = uncurry position at $ rotate (0.125 * Time.inSeconds time * 2 * pi) $ filled (rgb 1 0 0) $ square 15
+    player = uncurry position playerAt $ rotate (0.125 * Time.inSeconds time * 2 * pi) $ filled (rgb 1 0 0) $ square 15
     grid = [position x y $ filled (rgb 0.5 0.5 0.5) $ rect $ V2 (cellWidth+1) (cellHeight+1)
                 | (x, y) <- (GridMap.keys . GridMap.filter isNothing) lvl]
 
 
 update :: Engine e => Model -> Action -> (Model, Cmd e Action)
 update m Idle = (m, Cmd.none)
-update m@Model{ state } (Move dv) = (m { state = step dv state }, Cmd.none)
-update m@Model{ state, cam } (Tick time) = (m { cam = camStep state cam, time = time }, Cmd.none)
+update m@Model{ state, camAt } (Tick time) = (m { camAt = camStep state camAt, time = time }, Cmd.none)
 update m (WinSize v) = (m { winSize = v}, Cmd.none)
+update m@Model{ keysDown, keysAccu } (KeyDown key) =
+  (m { keysDown = keysDown `union` [key]
+     , keysAccu = keysAccu `union` [key]
+     }
+  , Cmd.none)
+update m@Model{ state, keysDown, keysAccu } (KeyUp key) =
+  let keysDown' = keysDown \\ [key]
+      keysAccu' = if null keysDown' then [] else keysAccu
+      state' = if null keysDown'
+        then let V2 mx my = sum $ map keyToMotion keysAccu
+             in step (mx, my) state
+        else state
+  in (m { state = state', keysDown = keysDown', keysAccu = keysAccu' }, Cmd.none)
+
+-- update m@Model{ state } (Move dv) = (m { state = step dv state }, Cmd.none)
 
 main :: IO ()
 main = do
   level <- execLevelGen 100 100 (rndLvl 3 20 0.7)
   let spawn = head $ GridMap.keys . GridMap.filter isJust $ level
-      initial = (Model { state = GameState{ at = spawn, lvl = level }, cam = (fromIntegral *** fromIntegral $ spawn), time = 0, winSize = V2 0 0 },
-                 Window.size WinSize)
-      subscriptions = Sub.batch [Time.every (Time.second / tickRate) Tick, Keyboard.presses handleKey, Window.resizes WinSize]
+      initialModel = Model
+        { state = GameState{ playerAt = spawn, lvl = level }
+        , camAt = (fromIntegral *** fromIntegral $ spawn)
+        , time = 0
+        , winSize = V2 0 0
+        , keysDown = []
+        , keysAccu = []
+        }
+      initial = (initialModel, Window.size WinSize)
+      subscriptions = Sub.batch
+        [ Time.every (Time.second / tickRate) Tick
+        , Keyboard.downs KeyDown
+        , Keyboard.ups KeyUp
+        , Window.resizes WinSize
+        ]
       gameConfig = GameConfig initial update subscriptions view
   engine <- SDL.startupWith $ SDL.defaultConfig { SDL.windowTitle = "Rogue" }
   Helm.run engine gameConfig
