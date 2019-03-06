@@ -14,10 +14,11 @@ import           Data.Maybe            (isJust, isNothing)
 import           Linear.V2
 import qualified Math.Geometry.GridMap as GridMap
 
+import           Helm                  (FPSLimit (..), GameConfig (..),
+                                        GameLifecycle (..))
 import qualified Helm
 import qualified Helm.Cmd              as Cmd
-import           Helm.Engine           (Cmd, Engine, GameConfig (GameConfig),
-                                        Key)
+import           Helm.Engine           (Cmd, Engine, Key)
 import qualified Helm.Engine.SDL       as SDL
 import qualified Helm.Keyboard         as Keyboard
 import qualified Helm.Sub              as Sub
@@ -40,10 +41,8 @@ step dir (state @ GameState { lvl, playerAt }) =
     else state { playerAt = at' }
 
 camStep :: GameState -> V2 Double -> V2 Double
-camStep GameState { playerAt = V2 x y } (V2 cx cy) = V2 (cx + rate * dx) (cy + rate * dy)
+camStep GameState { playerAt } camAt = camAt + pure rate * (fmap fromIntegral playerAt - camAt)
     where rate = 2.0 / tickRate
-          dx = fromIntegral x - cx
-          dy = fromIntegral y - cy
 
 keyToMotion :: Key -> V2 Int
 keyToMotion k = case k of
@@ -73,9 +72,9 @@ update m@Model{ keysDown, dir } (KeyDown key) =
          if firstPersonNav
          then
            case key of
-             Keyboard.LeftKey -> rotL dir
+             Keyboard.LeftKey  -> rotL dir
              Keyboard.RightKey -> rotR dir
-             _ -> dir
+             _                 -> dir
          else
            let motion = keyToMotion key
            in if motion == V2 0 0
@@ -94,9 +93,9 @@ update m@Model{ state, keysDown, dir } (KeyUp key) =
           if not $ null keysDown'
           then state
           else case keysDown of
-            [Keyboard.UpKey] -> step dir state
+            [Keyboard.UpKey]   -> step dir state
             [Keyboard.DownKey] -> step (-dir) state
-            _ -> state
+            _                  -> state
         else
           if null keysDown' && keysDown == [Keyboard.SpaceKey]
           then step dir state
@@ -123,6 +122,7 @@ main = do
         , Keyboard.ups KeyUp
         , Window.resizes WinSize
         ]
-      gameConfig = GameConfig initial update subscriptions Graphics.view
+      gameConfig = GameConfig (Limited 60) 1
+      gameLifecycle = GameLifecycle initial update subscriptions Graphics.view
   engine <- SDL.startupWith $ SDL.defaultConfig { SDL.windowTitle = "Rogue" }
-  Helm.run engine gameConfig
+  Helm.run engine gameConfig gameLifecycle
