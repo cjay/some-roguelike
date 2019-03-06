@@ -31,13 +31,13 @@ cellWidth = 20 :: Double
 cellHeight = 20 :: Double
 
 data GameState = GameState
-  { playerAt :: (Int, Int)
+  { playerAt :: V2 Int
   , lvl      :: Level
   }
 
 data Model = Model
   { state    :: GameState
-  , camAt    :: (Double, Double)
+  , camAt    :: V2 Double
   , winSize  :: V2 Int
   , time     :: Time
   , keysDown :: [Key]
@@ -51,16 +51,16 @@ data Action
   | Tick Time
   | WinSize (V2 Int)
 
-step :: (Int, Int) -> GameState -> GameState
-step (dx, dy) (state @ GameState { lvl, playerAt = (x, y) }) =
-  let at' = (x + dx, y + dy) in
+step :: V2 Int -> GameState -> GameState
+step dir (state @ GameState { lvl, playerAt }) =
+  let at' = playerAt + dir in
     if isNothing (lvl `getCell` at')
     then state
     else state { playerAt = at' }
 
-camStep :: GameState -> (Double, Double) -> (Double, Double)
-camStep GameState { playerAt = (x, y) } (cx, cy) = (cx + rate/tickRate * (fromIntegral x - cx),
-                                              cy + rate/tickRate * (fromIntegral y - cy))
+camStep :: GameState -> V2 Double -> V2 Double
+camStep GameState { playerAt = V2 x y } (V2 cx cy) = V2 (cx + rate/tickRate * (fromIntegral x - cx))
+                                                        (cy + rate/tickRate * (fromIntegral y - cy))
     where rate = 2
 
 keyToMotion :: Key -> V2 Int
@@ -72,19 +72,17 @@ keyToMotion k = case k of
   _                 -> V2 0 0
 
 view :: Model -> Helm.Graphics e
-view Model{ state = GameState {playerAt, lvl}, camAt = (cx, cy), winSize = V2 wx wy, time, dir = V2 dx dy } =
+view Model{ state = GameState { playerAt, lvl }, camAt = V2 cx cy, winSize = V2 wx wy, time, dir } =
   Helm.Graphics2D $
   center (V2 (fromIntegral wx/2) (fromIntegral wy/2)) $
   collage $ grid ++ [player, cursor]
   where
-    position x y = move $ V2 ((fromIntegral x - cx) * cellWidth)
+    position (V2 x y) = move $ V2 ((fromIntegral x - cx) * cellWidth)
                              ((fromIntegral y - cy) * cellHeight)
-    player = uncurry position playerAt $ rotate (0.125 * Time.inSeconds time * 2 * pi) $ filled (rgb 1 0 0) $ square 15
-    grid = [position x y $ filled (rgb 0.5 0.5 0.5) $ rect $ V2 (cellWidth+1) (cellHeight+1)
-                | (x, y) <- (GridMap.keys . GridMap.filter isNothing) lvl]
-    (px, py) = playerAt
-    curAt = (px + dx, py + dy)
-    cursor = uncurry position curAt $ outlined defaultLine { lineColor = rgb 0.8 0.8 0.8 } $ rect $ V2 (cellWidth+1) (cellHeight+1)
+    player = position playerAt $ rotate (0.125 * Time.inSeconds time * 2 * pi) $ filled (rgb 1 0 0) $ square 15
+    grid = [position (V2 x y) $ filled (rgb 0.5 0.5 0.5) $ rect $ V2 (cellWidth+1) (cellHeight+1)
+           | (x, y) <- (GridMap.keys . GridMap.filter isNothing) lvl]
+    cursor = position (playerAt + dir) $ outlined defaultLine { lineColor = rgb 0.8 0.8 0.8 } $ rect $ V2 (cellWidth+1) (cellHeight+1)
 
 update :: Engine e => Model -> Action -> (Model, Cmd e Action)
 update m Idle = (m, Cmd.none)
@@ -98,18 +96,18 @@ update m@Model{ keysDown, dir } (KeyDown key) =
 update m@Model{ state, keysDown, dir } (KeyUp key) =
   let keysDown' = keysDown \\ [key]
       state' = if null keysDown' && keysDown == [Keyboard.SpaceKey]
-        then let V2 mx my = dir
-             in step (mx, my) state
+        then step dir state
         else state
   in (m { state = state', keysDown = keysDown' }, Cmd.none)
 
 main :: IO ()
 main = do
   level <- execLevelGen 100 100 (rndLvl 3 20 0.7)
-  let spawn = head $ GridMap.keys . GridMap.filter isJust $ level
+  let (spawnX, spawnY) = head $ GridMap.keys . GridMap.filter isJust $ level
+      spawn = V2 spawnX spawnY
       initialModel = Model
         { state = GameState{ playerAt = spawn, lvl = level }
-        , camAt = (fromIntegral *** fromIntegral $ spawn)
+        , camAt = fmap fromIntegral spawn
         , time = 0
         , winSize = V2 0 0
         , keysDown = []

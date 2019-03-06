@@ -17,6 +17,7 @@ import           Math.Geometry.Grid.Octagonal (RectOctGrid, rectOctGrid)
 import qualified Math.Geometry.GridMap        as GridMap
 import           Math.Geometry.GridMap.Lazy   (LGridMap, lazyGridMap)
 import           Safe                         (headMay)
+import Linear.V2 (V2(V2))
 
 data Object = At | Enemy | Loot deriving (Show, Eq)
 type Cell = Maybe [Object]
@@ -33,10 +34,13 @@ getLeft = left
 getTop :: Rect -> Int
 getTop = top
 
-getCell :: Level -> (Int, Int) -> Cell
-getCell lvl idx = if lvl `Grid.contains` idx
-                  then lvl GridMap.! idx
-                  else Nothing
+getCell_ :: Level -> (Int, Int) -> Cell
+getCell_ lvl idx = if lvl `Grid.contains` idx
+                   then lvl GridMap.! idx
+                   else Nothing
+
+getCell :: Level -> V2 Int -> Cell
+getCell l (V2 x y) = getCell_ l (x, y)
 
 emptyLvl :: Int -> Int -> Level
 emptyLvl w h = lazyGridMap (rectOctGrid w h) (replicate (w*h) Nothing)
