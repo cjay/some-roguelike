@@ -33,6 +33,7 @@ executable rogue-exe
                      , rogue
                      , helm
                      , linear
+                     , lens
                      , grid
                      , MonadRandom
                      , mtl

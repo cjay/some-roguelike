@@ -4,6 +4,7 @@ module Main where
 
 import           Dungeon
 
+-- import           Control.Lens
 import           Control.Arrow
 import           Data.List             (union, (\\))
 import           Data.Maybe            (isJust, isNothing)
@@ -16,8 +17,9 @@ import           Helm.Color            (rgb)
 import           Helm.Engine           (Cmd, Engine, GameConfig (GameConfig),
                                         Key)
 import qualified Helm.Engine.SDL       as SDL
-import           Helm.Graphics2D       (center, collage, filled, move, rect,
-                                        rotate, square)
+import           Helm.Graphics2D       (LineStyle (..), center, collage,
+                                        defaultLine, filled, move, outlined,
+                                        rect, rotate, square)
 import qualified Helm.Keyboard         as Keyboard
 import qualified Helm.Sub              as Sub
 import           Helm.Time             (Time)
@@ -39,7 +41,7 @@ data Model = Model
   , winSize  :: V2 Int
   , time     :: Time
   , keysDown :: [Key]
-  , keysAccu :: [Key]
+  , dir      :: V2 Int
   }
 
 data Action
@@ -70,37 +72,36 @@ keyToMotion k = case k of
   _                 -> V2 0 0
 
 view :: Model -> Helm.Graphics e
-view Model{ state = GameState {playerAt, lvl}, camAt = (cx, cy), winSize = V2 wx wy, time } =
+view Model{ state = GameState {playerAt, lvl}, camAt = (cx, cy), winSize = V2 wx wy, time, dir = V2 dx dy } =
   Helm.Graphics2D $
   center (V2 (fromIntegral wx/2) (fromIntegral wy/2)) $
-  collage $ grid ++ [player]
+  collage $ grid ++ [player, cursor]
   where
     position x y = move $ V2 ((fromIntegral x - cx) * cellWidth)
                              ((fromIntegral y - cy) * cellHeight)
     player = uncurry position playerAt $ rotate (0.125 * Time.inSeconds time * 2 * pi) $ filled (rgb 1 0 0) $ square 15
     grid = [position x y $ filled (rgb 0.5 0.5 0.5) $ rect $ V2 (cellWidth+1) (cellHeight+1)
                 | (x, y) <- (GridMap.keys . GridMap.filter isNothing) lvl]
-
+    (px, py) = playerAt
+    curAt = (px + dx, py + dy)
+    cursor = uncurry position curAt $ outlined defaultLine { lineColor = rgb 0.8 0.8 0.8 } $ rect $ V2 (cellWidth+1) (cellHeight+1)
 
 update :: Engine e => Model -> Action -> (Model, Cmd e Action)
 update m Idle = (m, Cmd.none)
 update m@Model{ state, camAt } (Tick time) = (m { camAt = camStep state camAt, time = time }, Cmd.none)
 update m (WinSize v) = (m { winSize = v}, Cmd.none)
-update m@Model{ keysDown, keysAccu } (KeyDown key) =
+update m@Model{ keysDown, dir } (KeyDown key) =
   (m { keysDown = keysDown `union` [key]
-     , keysAccu = keysAccu `union` [key]
+     , dir = fmap signum $ dir + (keyToMotion key)
      }
   , Cmd.none)
-update m@Model{ state, keysDown, keysAccu } (KeyUp key) =
+update m@Model{ state, keysDown, dir } (KeyUp key) =
   let keysDown' = keysDown \\ [key]
-      keysAccu' = if null keysDown' then [] else keysAccu
-      state' = if null keysDown'
-        then let V2 mx my = sum $ map keyToMotion keysAccu
+      state' = if null keysDown' && keysDown == [Keyboard.SpaceKey]
+        then let V2 mx my = dir
              in step (mx, my) state
         else state
-  in (m { state = state', keysDown = keysDown', keysAccu = keysAccu' }, Cmd.none)
-
--- update m@Model{ state } (Move dv) = (m { state = step dv state }, Cmd.none)
+  in (m { state = state', keysDown = keysDown' }, Cmd.none)
 
 main :: IO ()
 main = do
@@ -112,7 +113,7 @@ main = do
         , time = 0
         , winSize = V2 0 0
         , keysDown = []
-        , keysAccu = []
+        , dir = V2 0 0
         }
       initial = (initialModel, Window.size WinSize)
       subscriptions = Sub.batch
