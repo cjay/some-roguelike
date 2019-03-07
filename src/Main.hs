@@ -1,4 +1,5 @@
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE NamedFieldPuns      #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module Main where
 
@@ -7,11 +8,12 @@ import qualified Dungeon
 import qualified Graphics
 import           Model
 
--- import           Control.Lens
 import           Control.Arrow
+import           Control.Lens
 import           Data.List             (union, (\\))
 import           Data.Maybe            (isJust, isNothing)
-import           Linear.V2
+import           Linear.Metric         (distance)
+import           Linear.V2             (V2 (..), _x, _y)
 import qualified Math.Geometry.GridMap as GridMap
 
 import           Helm                  (FPSLimit (..), GameConfig (..),
@@ -41,8 +43,19 @@ step dir (state @ GameState { lvl, playerAt }) =
     else state { playerAt = at' }
 
 camStep :: GameState -> V2 Double -> V2 Double
-camStep GameState { playerAt } camAt = camAt + pure rate * (fmap fromIntegral playerAt - camAt)
-    where rate = 2.0 / tickRate
+camStep GameState { playerAt } camAt = camAt''
+  where baseSpeed = 2.5 -- approach speed in cells per second at distance 1
+        minSpeed = 1.5
+        playerAt_ = fmap fromIntegral playerAt
+        dist :: V2 Double = playerAt_ - camAt
+        vel :: V2 Double = pure baseSpeed * dist -- inherits sign of dist
+        vel' = fmap (max minSpeed . abs) vel * signum vel
+        step = vel' / pure (fromIntegral tickRate)
+        camAt' = camAt + step
+        -- now prevent overshoot
+        dist' = playerAt_ - camAt'
+        snap _ax = if signum (dist'^._ax) == signum (dist^._ax) then camAt'^._ax else playerAt_^._ax
+        camAt'' = V2 (snap _x) (snap _y)
 
 keyToMotion :: Key -> V2 Int
 keyToMotion k = case k of
@@ -65,7 +78,7 @@ rotR dir = dropWhile (/= dir) clockwise !! 1
 update :: Engine e => Model -> Action -> (Model, Cmd e Action)
 update m Idle = (m, Cmd.none)
 update m@Model{ state, camAt } (Tick time) = (m { camAt = camStep state camAt, time = time }, Cmd.none)
-update m (WinSize v) = (m { winSize = v}, Cmd.none)
+update m (WinSize v) = (m { winSize = v }, Cmd.none)
 update m@Model{ keysDown, dir } (KeyDown key) =
   (m { keysDown = keysDown `union` [key]
      , dir =
@@ -117,7 +130,7 @@ main = do
         }
       initial = (initialModel, Window.size WinSize)
       subscriptions = Sub.batch
-        [ Time.every (Time.second / tickRate) Tick
+        [ Time.every (Time.second / fromIntegral tickRate) Tick
         , Keyboard.downs KeyDown
         , Keyboard.ups KeyUp
         , Window.resizes WinSize
