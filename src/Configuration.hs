@@ -1,7 +1,7 @@
 module Configuration where
 
-tickRate = 60 :: Double -- per second
-cellWidth = 20 :: Double
-cellHeight = 20 :: Double
+tickRate = 60 :: Int -- per second
+cellWidth = 20 :: Int
+cellHeight = 20 :: Int
 
-firstPersonNav = False
+firstPersonNav = True
