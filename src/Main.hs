@@ -135,7 +135,9 @@ main = do
         , Keyboard.ups KeyUp
         , Window.resizes WinSize
         ]
-      gameConfig = GameConfig (Limited 60) 1
-      gameLifecycle = GameLifecycle initial update subscriptions Graphics.view
+      imgPath = "bird.png"
   engine <- SDL.startupWith $ SDL.defaultConfig { SDL.windowTitle = "Rogue" }
-  Helm.run engine gameConfig gameLifecycle
+  SDL.withImage engine imgPath $ \image ->
+    let gameConfig = GameConfig (Limited 60) 1
+        gameLifecycle = GameLifecycle initial update subscriptions (Graphics.view image)
+    in Helm.run engine gameConfig gameLifecycle

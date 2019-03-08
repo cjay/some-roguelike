@@ -6,6 +6,7 @@ module Dungeon
   , execLevelGen
   , rndLvl
   , getCell
+  , printRndLvl
   ) where
 
 import           Control.Monad.Random
