@@ -1,8 +1,10 @@
 module Dungeon
   ( Level
+  , emptyLvl
   , execLevelGen
   , rndLvl
   , getCell
+  , allCells
   , printRndLvl
   ) where
 
@@ -15,7 +17,7 @@ import           Math.Geometry.Grid.Octagonal (RectOctGrid, rectOctGrid)
 import qualified Math.Geometry.GridMap        as GridMap
 import           Math.Geometry.GridMap.Lazy   (LGridMap, lazyGridMap)
 import           Safe                         (headMay)
-import Linear.V2 (V2(V2))
+import           Numeric.Vector
 
 data Object = At | Enemy | Loot deriving (Show, Eq)
 type Cell = Maybe [Object]
@@ -37,8 +39,12 @@ getCell_ lvl idx = if lvl `Grid.contains` idx
                    then lvl GridMap.! idx
                    else Nothing
 
-getCell :: Level -> V2 Int -> Cell
-getCell l (V2 x y) = getCell_ l (x, y)
+allCells :: Level -> [(Vec2i, Cell)]
+allCells lvl = flip map (GridMap.toList lvl) $ \((x, y), c) ->
+  (Vec2 x y, c)
+
+getCell :: Level -> Vec2i -> Cell
+getCell l (Vec2 x y) = getCell_ l (x, y)
 
 emptyLvl :: Int -> Int -> Level
 emptyLvl w h = lazyGridMap (rectOctGrid w h) (replicate (w*h) Nothing)
@@ -89,7 +95,7 @@ rndLvl minRoomEdge maxRoomEdge_ touchThresh = do
     -- minRoomEdge
     maxRoomEdge = max maxRoomEdge_ (2 * minRoomEdge - 1)
     -- implicit bsp tree by recursion
-    descend (rect@Rect{..}) = do
+    descend rect@Rect{..} = do
       let needVert = width > maxRoomEdge
           needHoriz = height > maxRoomEdge
       if not needVert && not needHoriz

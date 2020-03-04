@@ -1,6 +1,6 @@
 {-# LANGUAGE Strict #-}
 module Graphics
-  ( runMyVulkanProgram
+  ( runGraphics
   ) where
 
 import           Control.Concurrent       (forkIO)
@@ -9,7 +9,6 @@ import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
 import           Numeric.DataFrame
 
-import           Examples.Flat.Game
 import           Lib.Engine.Main
 import           Lib.Engine.Simple2D
 import           Lib.MonadIO.Chan
@@ -29,6 +28,7 @@ import           Lib.Vulkan.Shader
 -- import           Lib.Vulkan.UniformBufferObject
 
 
+import           ViewModel
 
 
 -- | cam pos using (x, y), ortho projection from z 0.1 to 10 excluding boundaries.
@@ -94,7 +94,7 @@ loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = do
   (textureReadyEvents, descrTextureInfos) <- auto $ unzip <$> mapM
     (createTextureInfo cap True) texturePaths
 
-  loadEvents <- newMVar $ textureReadyEvents
+  loadEvents <- newMVar textureReadyEvents
 
   materialDescrSets <- allocateDescriptorSetsForLayout dev descriptorPool (length descrTextureInfos) materialDSL
 
@@ -147,14 +147,14 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
 
 
 
-makeWorld :: GameState -> Assets -> Program r (Vec2f, [Object])
-makeWorld GameState {..} Assets {..} = do
+makeWorld :: ViewModel -> Assets -> Program r (Vec2f, [Object])
+makeWorld ViewModel {..} Assets {..} = do
 
   let objs = flip map walls $
         \(Vec2 x y) ->
           Object
           { materialBindInfo = DescrBindInfo (materialDescrSets !! 1) []
-          , modelMatrix = (scale 1 1 1) %* (translate3 $ vec3 (realToFrac x) (realToFrac y) (1))
+          , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
           }
 
   -- a bit simplistic. when hot loading assets, better filter the objects that depend on them
@@ -168,24 +168,22 @@ makeWorld GameState {..} Assets {..} = do
 myAppNewWindow :: GLFW.Window -> Program r WindowState
 myAppNewWindow window = do
   keyEvents <- newChan
-  let keyCallback _ key _ keyState _ = do
+  let keyCallback _ key _ keyState _ =
         writeChan keyEvents $ KeyEvent key keyState
   liftIO $ GLFW.setKeyCallback window (Just keyCallback)
   return WindowState {..}
 
 myAppMainThreadHook :: WindowState -> IO ()
-myAppMainThreadHook WindowState {..} = do
-  return ()
+myAppMainThreadHook WindowState {..} = return ()
 
-myAppStart :: WindowState -> EngineCapability -> Program r MyAppState
-myAppStart winState@WindowState{ keyEvents } cap@EngineCapability{ dev } = do
+myAppStart :: (Chan Event -> IO (MVar ViewModel)) -> WindowState -> EngineCapability -> Program r MyAppState
+myAppStart startGame winState@WindowState{ keyEvents } cap@EngineCapability{ dev } = do
   shaderStages <- loadShaders cap
   (materialDSL, pipelineLayout) <- makePipelineLayouts dev
   -- TODO beware of automatic resource lifetimes when making assets dynamic
   assets <- loadAssets cap materialDSL
   renderContextVar <- newEmptyMVar
-  gameState <- newMVar initialGameState
-  _ <- liftIO $ forkIO $ runGame gameState keyEvents
+  viewModel <- liftIO $ startGame keyEvents
   return $ MyAppState{..}
 
 myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Program r ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
@@ -199,7 +197,7 @@ myAppRecordFrame :: MyAppState -> VkCommandBuffer -> VkFramebuffer -> Program r 
 myAppRecordFrame MyAppState{..} cmdBuf framebuffer = do
   let WindowState{..} = winState
 
-  gs <- readMVar gameState
+  gs <- readMVar viewModel
   (camPos, objs) <- makeWorld gs assets
 
   renderContext <- readMVar renderContextVar
@@ -220,18 +218,18 @@ data MyAppState
   , assets           :: Assets
   , renderContextVar :: MVar RenderContext
   , winState         :: WindowState
-  , gameState        :: MVar GameState
+  , viewModel        :: MVar ViewModel
   }
 
 
-runMyVulkanProgram :: IO ()
-runMyVulkanProgram = do
+runGraphics :: (Chan Event -> IO (MVar ViewModel)) -> IO ()
+runGraphics startGame = do
   let app = App
-        { windowName = "vulkan-experiment"
+        { windowName = "Some Roguelike"
         , windowSize = (800, 600)
         , appNewWindow = myAppNewWindow
         , appMainThreadHook = myAppMainThreadHook
-        , appStart = myAppStart
+        , appStart = myAppStart startGame
         , appNewSwapchain = myAppNewSwapchain
         , appRecordFrame = myAppRecordFrame
         }

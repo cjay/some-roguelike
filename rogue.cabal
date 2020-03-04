@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 executable rogue
   hs-source-dirs:      src
   main-is:             Main.hs
-  other-modules:       Game, Dungeon, Behave, Graphics, Configuration 
+  other-modules:       Game, ViewModel, Dungeon, Behave, Graphics, Configuration
 -- , Model
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       apecs

@@ -9,47 +9,55 @@
 {-# LANGUAGE TypeFamilies               #-}
 
 module Game
-  ( GameState (..)
-  , Event (..)
-  , initialGameState
-  , runGame
+  ( runGame
   ) where
 
 import           Apecs
+import           Data.Maybe
 import           Control.Concurrent
 import           Control.Monad
 import           Graphics.UI.GLFW   (Key, KeyState)
 import qualified Graphics.UI.GLFW   as GLFW
-import           Numeric.DataFrame
+import           Numeric.Vector
+import qualified Math.Geometry.GridMap        as GridMap
+
+import qualified Dungeon
+import ViewModel
 
 
 newtype Position = Position Vec2i deriving Show
 instance Component Position where type Storage Position = Map Position
 
-data Wall = Wall deriving Show
-instance Component Wall where type Storage Wall = Map Wall
+-- for now walls are static and live only in Global Level:
+-- data Wall = Wall deriving Show
+-- instance Component Wall where type Storage Wall = Map Wall
 
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
 
 newtype Time = Time Double deriving (Show, Num)
-instance Semigroup Time where (<>) = (+)
+instance Semigroup Time where (<>) = error "unexpected use of Semigroup Time <>"
 instance Monoid Time where mempty = 0
 instance Component Time where type Storage Time = Global Time
+
+newtype Level = Level Dungeon.Level
+instance Component Level where type Storage Level = Global Level
+instance Monoid Level where mempty = Level $ Dungeon.emptyLvl 1 1
+instance Semigroup Level where (<>) = error "unexpected use of Semigroup Level <>"
 
 -- what about ''Camera? see Apecs.Gloss
 
 -- creates type World and function initWorld :: IO World
-makeWorld "World" [''Position, ''Player, ''Wall, ''Time]
+makeWorld "World" [''Position, ''Player, ''Time, ''Level]
 
 type System' a = System World a
 
 initialize :: System' ()
 initialize = do
-  _ <- newEntity (Player, Position (vec2 0 0))
-  let wall p = newEntity (Wall, Position p) >> return ()
-  mapM_ wall [vec2 x y | x <- [-1,0,1], y <- [-1,0,1], not (x == 0 && y == 0)]
-  return ()
+  level <- liftIO $ Dungeon.execLevelGen 100 100 (Dungeon.rndLvl 3 20 0.7)
+  let (spawnX, spawnY) = head $ GridMap.keys . GridMap.filter isJust $ level
+  _ <- newEntity (Player, Position (vec2 spawnX spawnY))
+  set global $ Level level
 
 handleEvent :: Event -> System' ()
 handleEvent (KeyEvent key keyState) =
@@ -64,12 +72,7 @@ handleEvent (KeyEvent key keyState) =
 handleEvent (Tick time) = set global (Time time)
 
 
-data Event
-  = KeyEvent Key KeyState
-  | Tick Double
-
-
-runGame :: MVar GameState -> Chan Event -> IO ()
+runGame :: MVar ViewModel -> Chan Event -> IO ()
 runGame gsVar eventChan = do
   w <- initWorld
   _ <- forkIO $ forever $ do
@@ -84,30 +87,19 @@ runGame gsVar eventChan = do
       event <- liftIO $ readChan eventChan
       handleEvent event
       -- now the consequences of the event can propagate
-      -- modifyMVar_ gsVar gameStateUpdate -- that would need unliftIO
+      -- modifyMVar_ gsVar viewModelUpdate -- that would need unliftIO
       oldGs <- liftIO $ takeMVar gsVar
-      newGs <- gameStateUpdate oldGs
+      newGs <- viewModelUpdate oldGs
       liftIO $ putMVar gsVar newGs
 
--- | This is the glue between game logic and graphics code.
---   It carries only what the graphics part needs.
-data GameState
-  = GameState
-  { camPos :: Vec2f
-  , walls :: [Vec2i]
-  }
-
-initialGameState :: GameState
-initialGameState = GameState
-  { camPos = 0
-  , walls = []
-  }
-
-gameStateUpdate :: GameState -> System' GameState
-gameStateUpdate oldGs = do
+-- TODO filter out tiles outside of camera
+viewModelUpdate :: ViewModel -> System' ViewModel
+viewModelUpdate oldGs = do
   mPos <- cfold (\_ (Player, Position pos) -> Just pos) Nothing
   let Vec2 x y = case mPos of
         Just pl -> pl
         Nothing -> error "player entity doesn't exist"
-  walls <- cfold (\ws (Wall, Position w) -> w:ws) []
+  -- walls <- cfold (\ws (Wall, Position w) -> w:ws) []
+  Level lvl <- get global
+  let walls = map fst $ filter (isNothing . snd) $ Dungeon.allCells lvl
   return oldGs { camPos = Vec2 (fromIntegral x) (fromIntegral y), walls}
