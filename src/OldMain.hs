@@ -1,8 +1,8 @@
-module Main where
+module OldMain where
 
 import           Configuration
 import qualified Dungeon
-import qualified Graphics
+import qualified OldGraphics
 import           Model
 
 import           Control.Arrow
@@ -136,5 +136,5 @@ main = do
   engine <- SDL.startupWith $ SDL.defaultConfig { SDL.windowTitle = "Rogue" }
   SDL.withImage engine imgPath $ \image ->
     let gameConfig = GameConfig (Limited 60) 1
-        gameLifecycle = GameLifecycle initial update subscriptions (Graphics.view image)
+        gameLifecycle = GameLifecycle initial update subscriptions (OldGraphics.view image)
     in Helm.run engine gameConfig gameLifecycle

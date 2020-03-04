@@ -1,4 +1,4 @@
-module Graphics (view) where
+module OldGraphics (view) where
 
 import           Configuration
 import           Model
