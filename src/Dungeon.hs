@@ -1,6 +1,3 @@
-{-# LANGUAGE RecordWildCards     #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Dungeon
   ( Level
   , execLevelGen
@@ -92,7 +89,7 @@ rndLvl minRoomEdge maxRoomEdge_ touchThresh = do
     -- minRoomEdge
     maxRoomEdge = max maxRoomEdge_ (2 * minRoomEdge - 1)
     -- implicit bsp tree by recursion
-    descend (rect @ Rect { .. }) = do
+    descend (rect@Rect{..}) = do
       let needVert = width > maxRoomEdge
           needHoriz = height > maxRoomEdge
       if not needVert && not needHoriz

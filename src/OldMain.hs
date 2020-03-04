@@ -1,6 +1,3 @@
-{-# LANGUAGE NamedFieldPuns      #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Main where
 
 import           Configuration
@@ -36,7 +33,7 @@ data Action
   | WinSize (V2 Int)
 
 step :: V2 Int -> GameState -> GameState
-step dir (state @ GameState { lvl, playerAt }) =
+step dir (state@GameState { lvl, playerAt }) =
   let at' = playerAt + dir in
     if isNothing (lvl `Dungeon.getCell` at')
     then state
