@@ -5,6 +5,7 @@ module Dungeon
   , rndLvl
   , getCell
   , allCells
+  , allCellsBetween
   , printRndLvl
   ) where
 
@@ -42,6 +43,12 @@ getCell_ lvl idx = if lvl `Grid.contains` idx
 allCells :: Level -> [(Vec2i, Cell)]
 allCells lvl = flip map (GridMap.toList lvl) $ \((x, y), c) ->
   (Vec2 x y, c)
+
+allCellsBetween :: Level -> Vec2i -> Vec2i -> [(Vec2i, Cell)]
+allCellsBetween lvl (Vec2 left top) (Vec2 right bottom) =
+  let idxs = [Vec2 x y | y <- [top..bottom], x <- [left..right]]
+  in flip map idxs $ \pos@(Vec2 x y) ->
+    (pos, join $ GridMap.lookup (x, y) lvl)
 
 getCell :: Level -> Vec2i -> Cell
 getCell l (Vec2 x y) = getCell_ l (x, y)

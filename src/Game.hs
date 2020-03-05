@@ -72,8 +72,8 @@ handleEvent (KeyEvent key keyState) =
 handleEvent (Tick time) = set global (Time time)
 
 
-runGame :: MVar ViewModel -> Chan Event -> IO ()
-runGame gsVar eventChan = do
+runGame :: MVar ViewModel -> MVar ViewState -> Chan Event -> IO ()
+runGame vmVar vsVar eventChan = do
   w <- initWorld
   _ <- forkIO $ forever $ do
     threadDelay 16667
@@ -86,20 +86,36 @@ runGame gsVar eventChan = do
     forever $ do
       event <- liftIO $ readChan eventChan
       handleEvent event
-      -- now the consequences of the event can propagate
-      -- modifyMVar_ gsVar viewModelUpdate -- that would need unliftIO
-      oldGs <- liftIO $ takeMVar gsVar
-      newGs <- viewModelUpdate oldGs
-      liftIO $ putMVar gsVar newGs
+      oldVm <- liftIO $ readMVar vmVar
+      vs <- liftIO $ readMVar vsVar
+      newVm <- viewModelUpdate oldVm vs
+      liftIO $ swapMVar vmVar newVm
 
--- TODO filter out tiles outside of camera
-viewModelUpdate :: ViewModel -> System' ViewModel
-viewModelUpdate oldGs = do
-  mPos <- cfold (\_ (Player, Position pos) -> Just pos) Nothing
-  let Vec2 x y = case mPos of
+viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
+viewModelUpdate ViewModel{ camHeight } ViewState{ aspectRatio } = do
+  mayPos <- cfold (\_ (Player, Position pos) -> Just pos) Nothing
+  let Vec2 x y = case mayPos of
         Just pl -> pl
         Nothing -> error "player entity doesn't exist"
-  -- walls <- cfold (\ws (Wall, Position w) -> w:ws) []
+      -- TODO smooth cam
+      camPos = Vec2 (fromIntegral x) (fromIntegral y)
+      Vec2 camX camY = camPos
+      camWidth = aspectRatio * camHeight
+      left = camX - 0.5 * camWidth
+      right = camX + 0.5 * camWidth
+      top = camY - 0.5 * camHeight
+      bottom = camY + 0.5 * camHeight
+      -- rounding away from zero
+      bound x = let x' = ceiling (abs x) in if x < 0 then - x' else x'
+      topLeftBound = Vec2 (bound left) (bound top)
+      bottomRightBound = Vec2 (bound right) (bound bottom)
   Level lvl <- get global
-  let walls = map fst $ filter (isNothing . snd) $ Dungeon.allCells lvl
-  return oldGs { camPos = Vec2 (fromIntegral x) (fromIntegral y), walls}
+  let walls = map fst $
+        filter (isNothing . snd) $
+        Dungeon.allCellsBetween lvl topLeftBound bottomRightBound
+  return ViewModel
+    { camPos
+    , camHeight
+    , playerPos = Vec2 x y
+    , walls
+    }

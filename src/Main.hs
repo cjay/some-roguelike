@@ -5,11 +5,12 @@ import           Graphics
 import           Game
 import           ViewModel
 
-startGame :: Chan Event -> IO (MVar ViewModel)
+startGame :: Chan Event -> IO (MVar ViewModel, MVar ViewState)
 startGame events = do
   viewModel <- newMVar initialViewModel
-  _ <- forkIO $ runGame viewModel events
-  return viewModel
+  viewState <- newMVar initialViewState
+  _ <- forkIO $ runGame viewModel viewState events
+  return (viewModel, viewState)
 
 main :: IO ()
 main = runGraphics startGame

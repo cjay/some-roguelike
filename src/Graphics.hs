@@ -30,16 +30,19 @@ import           Lib.Vulkan.Shader
 
 import           ViewModel
 
-
--- | cam pos using (x, y), ortho projection from z 0.1 to 10 excluding boundaries.
-viewProjMatrix :: VkExtent2D -> Vec2f -> Program r Mat44f
-viewProjMatrix extent (Vec2 x y) = do
+extentToAspect :: VkExtent2D -> Float
+extentToAspect extent =
   let width :: Float = fromIntegral $ getField @"width" extent
       height :: Float = fromIntegral $ getField @"height" extent
-      camPos = Vec3 x y 0
+  in width / height
+
+-- | cam pos and cam size in world coordinates -> ortho projection from z 0.1 to
+--   10 excluding boundaries.
+viewProjMatrix :: Vec2f -> Vec2f -> Program r Mat44f
+viewProjMatrix (Vec2 x y) (Vec2 wx wy) = do
+  let camPos = Vec3 x y 0
       view = translate3 (- camPos)
-      camHeight = 5
-      proj = orthogonalVk 0.1 10 (width/height * camHeight) camHeight
+      proj = orthogonalVk 0.1 10 wx wy
   return $ view %* proj
 
 
@@ -153,7 +156,7 @@ makeWorld ViewModel {..} Assets {..} = do
   let objs = flip map walls $
         \(Vec2 x y) ->
           Object
-          { materialBindInfo = DescrBindInfo (materialDescrSets !! 1) []
+          { materialBindInfo = DescrBindInfo (materialDescrSets !! 2) []
           , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
           }
 
@@ -176,14 +179,14 @@ myAppNewWindow window = do
 myAppMainThreadHook :: WindowState -> IO ()
 myAppMainThreadHook WindowState {..} = return ()
 
-myAppStart :: (Chan Event -> IO (MVar ViewModel)) -> WindowState -> EngineCapability -> Program r MyAppState
+myAppStart :: (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> WindowState -> EngineCapability -> Program r MyAppState
 myAppStart startGame winState@WindowState{ keyEvents } cap@EngineCapability{ dev } = do
   shaderStages <- loadShaders cap
   (materialDSL, pipelineLayout) <- makePipelineLayouts dev
   -- TODO beware of automatic resource lifetimes when making assets dynamic
   assets <- loadAssets cap materialDSL
   renderContextVar <- newEmptyMVar
-  viewModel <- liftIO $ startGame keyEvents
+  (viewModel, viewState) <- liftIO $ startGame keyEvents
   return $ MyAppState{..}
 
 myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Program r ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
@@ -191,17 +194,20 @@ myAppNewSwapchain MyAppState{..} swapInfo = do
   _ <- tryTakeMVar renderContextVar
   (framebuffers, nextSems, renderContext) <- prepareRender cap swapInfo shaderStages pipelineLayout
   putMVar renderContextVar renderContext
+  swapMVar viewState $ ViewState { aspectRatio = extentToAspect (extent renderContext) }
   return (framebuffers, nextSems)
 
 myAppRecordFrame :: MyAppState -> VkCommandBuffer -> VkFramebuffer -> Program r ()
 myAppRecordFrame MyAppState{..} cmdBuf framebuffer = do
   let WindowState{..} = winState
 
-  gs <- readMVar viewModel
-  (camPos, objs) <- makeWorld gs assets
+  vm@ViewModel{ camHeight } <- readMVar viewModel
+  (camPos, objs) <- makeWorld vm assets
 
   renderContext <- readMVar renderContextVar
-  viewProjTransform <- viewProjMatrix (extent renderContext) camPos
+  ViewState { aspectRatio } <- readMVar viewState
+  let viewSize = Vec2 (aspectRatio*camHeight) camHeight
+  viewProjTransform <- viewProjMatrix camPos viewSize
   recordAll renderContext viewProjTransform objs cmdBuf framebuffer
 
 data WindowState
@@ -219,10 +225,11 @@ data MyAppState
   , renderContextVar :: MVar RenderContext
   , winState         :: WindowState
   , viewModel        :: MVar ViewModel
+  , viewState        :: MVar ViewState
   }
 
 
-runGraphics :: (Chan Event -> IO (MVar ViewModel)) -> IO ()
+runGraphics :: (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> IO ()
 runGraphics startGame = do
   let app = App
         { windowName = "Some Roguelike"
