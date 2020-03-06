@@ -86,7 +86,7 @@ runGame :: MVar ViewModel -> MVar ViewState -> Chan Event -> IO ()
 runGame vmVar vsVar eventChan = do
   w <- initWorld
   _ <- forkIO $ forever $ do
-    threadDelay 16667
+    threadDelay $ round (1 / realToFrac tickRate * 1e6)
     t <- GLFW.getTime >>= \case
       Just time -> return time
       Nothing -> error "GLFW.getTime failed"
@@ -96,10 +96,11 @@ runGame vmVar vsVar eventChan = do
     forever $ do
       event <- liftIO $ readChan eventChan
       handleEvent event
-      oldVm <- liftIO $ readMVar vmVar
-      vs <- liftIO $ readMVar vsVar
-      newVm <- viewModelUpdate oldVm vs
-      liftIO $ swapMVar vmVar newVm
+      when (isTick event) $ do
+        oldVm <- liftIO $ readMVar vmVar
+        vs <- liftIO $ readMVar vsVar
+        newVm <- viewModelUpdate oldVm vs
+        void $ liftIO $ swapMVar vmVar newVm
 
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
 viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do

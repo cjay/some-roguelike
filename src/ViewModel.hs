@@ -39,3 +39,7 @@ initialViewState = ViewState
 data Event
   = KeyEvent Key KeyState
   | Tick Double
+
+isTick :: Event -> Bool
+isTick (Tick _) = True
+isTick _ = False
