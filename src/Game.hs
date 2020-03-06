@@ -15,12 +15,15 @@ module Game
 import           Apecs
 import           Data.Maybe
 import           Control.Concurrent
+import           Control.Lens hiding (Level, set)
 import           Control.Monad
 import           Graphics.UI.GLFW   (Key, KeyState)
 import qualified Graphics.UI.GLFW   as GLFW
-import           Numeric.Vector
+import           Linear.V2             (V2 (..), _x, _y)
 import qualified Math.Geometry.GridMap        as GridMap
+import           Numeric.Vector
 
+import Configuration
 import qualified Dungeon
 import ViewModel
 
@@ -99,14 +102,14 @@ runGame vmVar vsVar eventChan = do
       liftIO $ swapMVar vmVar newVm
 
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
-viewModelUpdate ViewModel{ camHeight } ViewState{ aspectRatio } = do
+viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do
   mayPos <- cfold (\_ (Player, Position pos) -> Just pos) Nothing
   let Vec2 x y = case mayPos of
         Just pl -> pl
         Nothing -> error "player entity doesn't exist"
-      -- TODO smooth cam
-      camPos = Vec2 (fromIntegral x) (fromIntegral y)
-      Vec2 camX camY = camPos
+      camPos' = if initialized then camStep playerPos camPos else playerPos
+        where playerPos = fromIntegral <$> V2 x y
+      V2 camX camY = camPos'
       camWidth = aspectRatio * camHeight
       margin = 1
       left = camX - 0.5 * camWidth - margin
@@ -124,8 +127,23 @@ viewModelUpdate ViewModel{ camHeight } ViewState{ aspectRatio } = do
         filter (isNothing . snd) $
         Dungeon.allCellsBetween lvl topLeftBound bottomRightBound
   return ViewModel
-    { camPos
+    { camPos = camPos'
     , camHeight
     , playerPos = Vec2 x y
     , walls
+    , initialized = True
     }
+
+camStep :: V2 Float -> V2 Float -> V2 Float
+camStep playerPos camPos = camPos''
+  where baseSpeed = 2.5 -- approach speed in cells per second at distance 1
+        minSpeed = 1.5
+        dist :: V2 Float = playerPos - camPos
+        vel :: V2 Float = pure baseSpeed * dist -- inherits sign of dist
+        vel' = fmap (max minSpeed . abs) vel * signum vel
+        step = vel' / pure (fromIntegral tickRate)
+        camAt' = camPos + step
+        -- now prevent overshoot
+        dist' = playerPos - camAt'
+        snap _ax = if signum (dist'^._ax) == signum (dist^._ax) then camAt'^._ax else playerPos^._ax
+        camPos'' = V2 (snap _x) (snap _y)

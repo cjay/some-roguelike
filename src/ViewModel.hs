@@ -2,15 +2,17 @@ module ViewModel where
 
 import           Graphics.UI.GLFW   (Key, KeyState)
 import           Numeric.DataFrame
+import           Linear.V2             (V2 (..))
 
 -- | This carries everything that flows from game logic to module Graphics
 data ViewModel
   = ViewModel
-  { camPos :: Vec2f
+  { camPos :: V2 Float
   , camHeight :: Float
   -- ^ requested height of the view in world coordinates
   , playerPos :: Vec2i
   , walls :: [Vec2i]
+  , initialized :: Bool
   }
 
 initialViewModel :: ViewModel
@@ -19,6 +21,7 @@ initialViewModel = ViewModel
   , camHeight = 20
   , playerPos = 0
   , walls = []
+  , initialized = False
   }
 
 -- | This carries everything that flows from module Graphics to the game logic

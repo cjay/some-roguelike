@@ -7,6 +7,7 @@ import           Control.Concurrent       (forkIO)
 import           Control.Monad
 import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
+import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 
 import           Lib.Engine.Main
@@ -171,7 +172,9 @@ makeWorld ViewModel {..} Assets {..} = do
   let allDone = null notDone
   putMVar loadEvents notDone
 
-  return (camPos, if allDone then objs <> [player] else [])
+  let V2 x y = camPos
+
+  return (Vec2 x y, if allDone then objs <> [player] else [])
 
 myAppNewWindow :: GLFW.Window -> Program r WindowState
 myAppNewWindow window = do
