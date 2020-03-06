@@ -68,9 +68,16 @@ handleEvent (KeyEvent key keyState) =
           (GLFW.Key'Up, GLFW.KeyState'Released)    -> vec2 0 (-1)
           (GLFW.Key'Down, GLFW.KeyState'Released)  -> vec2 0 1
           _                                        -> 0
-  in cmap $ \(Player, Position pos) -> Position (pos + motion)
+  in step motion
 handleEvent (Tick time) = set global (Time time)
 
+step :: Vec2i -> System' ()
+step motion = cmapM $ \(Player, Position pos) -> do
+  Level lvl <- get global
+  let pos' = pos + motion
+  return $ if isJust (lvl `Dungeon.getCell` pos')
+    then Right $ Position pos'
+    else Left ()
 
 runGame :: MVar ViewModel -> MVar ViewState -> Chan Event -> IO ()
 runGame vmVar vsVar eventChan = do
