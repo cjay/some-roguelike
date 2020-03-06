@@ -1,5 +1,6 @@
 module Main where
 
+import           Lib.Engine.Config
 import           Control.Concurrent
 import           Graphics
 import           Game
@@ -13,4 +14,4 @@ startGame events = do
   return (viewModel, viewState)
 
 main :: IO ()
-main = runGraphics startGame
+main = runGraphics [] startGame

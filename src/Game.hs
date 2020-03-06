@@ -58,7 +58,7 @@ deriving instance Semigroup KeysDown
 newtype Direction = Direction (V2 Int)
 instance Component Direction where type Storage Direction = Global Direction
 instance Monoid Direction where mempty = Direction 0
-instance Semigroup Direction where (<>) = error "unexpected use of Semigroup Level <>"
+instance Semigroup Direction where (<>) = error "unexpected use of Semigroup Direction <>"
 
 -- what about ''Camera? see Apecs.Gloss
 

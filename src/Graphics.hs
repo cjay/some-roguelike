@@ -10,6 +10,7 @@ import           Graphics.Vulkan.Core_1_0
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 
+import           Lib.Engine.Config
 import           Lib.Engine.Main
 import           Lib.Engine.Simple2D
 import           Lib.MonadIO.Chan
@@ -242,11 +243,13 @@ data MyAppState
   }
 
 
-runGraphics :: (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> IO ()
-runGraphics startGame = do
+runGraphics :: [Flag] -> (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> IO ()
+runGraphics flags startGame = do
   let app = App
         { windowName = "Some Roguelike"
         , windowSize = (800, 600)
+        , flags
+        , syncMode = VSync
         , appNewWindow = myAppNewWindow
         , appMainThreadHook = myAppMainThreadHook
         , appStart = myAppStart startGame
