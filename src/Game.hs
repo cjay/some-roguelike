@@ -4,6 +4,7 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
+{-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TypeFamilies               #-}
@@ -14,6 +15,7 @@ module Game
 
 import           Apecs
 import           Data.Maybe
+import           Data.List (union, (\\))
 import           Control.Concurrent
 import           Control.Lens hiding (Level, set)
 import           Control.Monad
@@ -48,10 +50,20 @@ instance Component Level where type Storage Level = Global Level
 instance Monoid Level where mempty = Level $ Dungeon.emptyLvl 1 1
 instance Semigroup Level where (<>) = error "unexpected use of Semigroup Level <>"
 
+newtype KeysDown = KeysDown [Key]
+instance Component KeysDown where type Storage KeysDown = Global KeysDown
+deriving instance Monoid KeysDown
+deriving instance Semigroup KeysDown
+
+newtype Direction = Direction (V2 Int)
+instance Component Direction where type Storage Direction = Global Direction
+instance Monoid Direction where mempty = Direction 0
+instance Semigroup Direction where (<>) = error "unexpected use of Semigroup Level <>"
+
 -- what about ''Camera? see Apecs.Gloss
 
 -- creates type World and function initWorld :: IO World
-makeWorld "World" [''Position, ''Player, ''Time, ''Level]
+makeWorld "World" [''Position, ''Player, ''Time, ''Level, ''KeysDown, ''Direction]
 
 type System' a = System World a
 
@@ -62,16 +74,41 @@ initialize = do
   _ <- newEntity (Player, Position (vec2 spawnX spawnY))
   set global $ Level level
 
+keyToMotion :: Key -> V2 Int
+keyToMotion key =
+  case key of
+    GLFW.Key'Left  -> V2 (-1) 0
+    GLFW.Key'Right -> V2 1 0
+    GLFW.Key'Up    -> V2 0 (-1)
+    GLFW.Key'Down  -> V2 0 1
+    _              -> 0
+
 handleEvent :: Event -> System' ()
-handleEvent (KeyEvent key keyState) =
-  let motion =
-        case (key, keyState) of
-          (GLFW.Key'Left, GLFW.KeyState'Released)  -> vec2 (-1) 0
-          (GLFW.Key'Right, GLFW.KeyState'Released) -> vec2 1 0
-          (GLFW.Key'Up, GLFW.KeyState'Released)    -> vec2 0 (-1)
-          (GLFW.Key'Down, GLFW.KeyState'Released)  -> vec2 0 1
-          _                                        -> 0
-  in step motion
+handleEvent (KeyEvent key keyState)
+  | keyState `elem` [GLFW.KeyState'Pressed, GLFW.KeyState'Repeating]
+  = do
+      KeysDown keysDown <- get global
+      let keysDown' = keysDown `union` [key]
+      set global $ KeysDown keysDown'
+      Direction dir <- get global
+      let dir'' =
+            let motion = keyToMotion key
+            in if motion == V2 0 0
+              then dir
+              else
+                let dir' = fmap signum $ dir + motion
+                in if dir' == V2 0 0 || dir' == dir then motion
+                    else dir'
+      set global $ Direction dir''
+      return ()
+  | keyState == GLFW.KeyState'Released
+  = do
+      KeysDown keysDown <- get global
+      let keysDown' = keysDown \\ [key]
+      set global $ KeysDown keysDown'
+      Direction (V2 x y) <- get global
+      when (null keysDown' && keysDown == [GLFW.Key'Space]) $
+        step (Vec2 x y)
 handleEvent (Tick time) = set global (Time time)
 
 step :: Vec2i -> System' ()
@@ -127,10 +164,12 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
   let walls = map fst $
         filter (isNothing . snd) $
         Dungeon.allCellsBetween lvl topLeftBound bottomRightBound
+  Direction (V2 dx dy) <- get global
   return ViewModel
     { camPos = camPos'
     , camHeight
     , playerPos = Vec2 x y
+    , dirIndicator = Vec2 dx dy
     , walls
     , initialized = True
     }

@@ -165,6 +165,11 @@ makeWorld ViewModel {..} Assets {..} = do
           { materialBindInfo = DescrBindInfo (materialDescrSets !! 0) []
           , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
           }
+      dir = let Vec2 x y = playerPos + dirIndicator in
+          Object
+          { materialBindInfo = DescrBindInfo (materialDescrSets !! 2) []
+          , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
+          }
 
   -- a bit simplistic. when hot loading assets, better filter the objects that depend on them
   events <- takeMVar loadEvents
@@ -174,7 +179,7 @@ makeWorld ViewModel {..} Assets {..} = do
 
   let V2 x y = camPos
 
-  return (Vec2 x y, if allDone then objs <> [player] else [])
+  return (Vec2 x y, if allDone then objs <> [player, dir] else [])
 
 myAppNewWindow :: GLFW.Window -> Program r WindowState
 myAppNewWindow window = do

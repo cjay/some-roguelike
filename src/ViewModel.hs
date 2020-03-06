@@ -11,6 +11,7 @@ data ViewModel
   , camHeight :: Float
   -- ^ requested height of the view in world coordinates
   , playerPos :: Vec2i
+  , dirIndicator :: Vec2i
   , walls :: [Vec2i]
   , initialized :: Bool
   }
@@ -20,6 +21,7 @@ initialViewModel = ViewModel
   { camPos = 0
   , camHeight = 20
   , playerPos = 0
+  , dirIndicator = 0
   , walls = []
   , initialized = False
   }
