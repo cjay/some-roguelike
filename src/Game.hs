@@ -101,12 +101,15 @@ viewModelUpdate ViewModel{ camHeight } ViewState{ aspectRatio } = do
       camPos = Vec2 (fromIntegral x) (fromIntegral y)
       Vec2 camX camY = camPos
       camWidth = aspectRatio * camHeight
-      left = camX - 0.5 * camWidth
-      right = camX + 0.5 * camWidth
-      top = camY - 0.5 * camHeight
-      bottom = camY + 0.5 * camHeight
+      margin = 1
+      left = camX - 0.5 * camWidth - margin
+      right = camX + 0.5 * camWidth + margin
+      top = camY - 0.5 * camHeight - margin
+      bottom = camY + 0.5 * camHeight + margin
       -- rounding away from zero
-      bound x = let x' = ceiling (abs x) in if x < 0 then - x' else x'
+      bound x =
+        let x' = ceiling (abs x)
+        in if x < 0 then - x' else x'
       topLeftBound = Vec2 (bound left) (bound top)
       bottomRightBound = Vec2 (bound right) (bound bottom)
   Level lvl <- get global

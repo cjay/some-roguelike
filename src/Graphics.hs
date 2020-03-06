@@ -156,7 +156,7 @@ makeWorld ViewModel {..} Assets {..} = do
   let objs = flip map walls $
         \(Vec2 x y) ->
           Object
-          { materialBindInfo = DescrBindInfo (materialDescrSets !! 2) []
+          { materialBindInfo = DescrBindInfo (materialDescrSets !! 1) []
           , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
           }
 
