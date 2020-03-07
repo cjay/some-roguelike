@@ -10,7 +10,6 @@ import           Graphics.Vulkan.Core_1_0
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 
-import           Lib.Engine.Config
 import           Lib.Engine.Main
 import           Lib.Engine.Simple2D
 import           Lib.MonadIO.Chan
@@ -20,11 +19,11 @@ import           Lib.Resource
 import           Lib.Utils                (orthogonalVk, scale)
 import           Lib.Vulkan.Descriptor
 import           Lib.Vulkan.Device
-import           Lib.Vulkan.Drawing
 import           Lib.Vulkan.Engine
 import           Lib.Vulkan.Image
 import           Lib.Vulkan.Pipeline
 import           Lib.Vulkan.Presentation
+import           Lib.Vulkan.RenderPass
 import           Lib.Vulkan.Queue
 import           Lib.Vulkan.Shader
 -- import           Lib.Vulkan.UniformBufferObject
@@ -121,14 +120,13 @@ prepareRender :: EngineCapability
               -> VkPipelineLayout
               -> Program r ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)], RenderContext)
 prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
-  let SwapchainInfo { swapExtent, swapImgFormat } = swapInfo
+  let SwapchainInfo { swapImgs, swapExtent, swapImgFormat } = swapInfo
   msaaSamples <- getMaxUsableSampleCount pdev
   depthFormat <- findDepthFormat pdev
 
   swapImgViews <- auto $
-    mapM (\image -> createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1)
-         (swapImgs swapInfo)
-  renderPass <- auto $ createRenderPass dev swapInfo depthFormat msaaSamples
+    mapM (\image -> createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1) swapImgs
+  renderPass <- auto $ createRenderPass dev swapImgFormat depthFormat msaaSamples
   graphicsPipeline
     <- auto $ createGraphicsPipeline dev swapExtent
                               [] []
@@ -142,11 +140,14 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
                                     swapImgFormat swapExtent msaaSamples
   (depthAttSem, depthAttImgView) <- auto $ createDepthAttImgView cap
                                     swapExtent msaaSamples
-  let nextSems = [(colorAttSem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
+  let nextSems = [ (colorAttSem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
                  , (depthAttSem, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
                  ]
-  framebuffers
-    <- auto $ createFramebuffers dev renderPass swapInfo swapImgViews depthAttImgView colorAttImgView
+  framebuffers <- mapM
+    (auto
+      . createFramebuffer dev renderPass swapExtent
+      . framebufferAttachments colorAttImgView depthAttImgView)
+    swapImgViews
 
   return (framebuffers, nextSems, RenderContext graphicsPipeline renderPass pipelineLayout swapExtent)
 
@@ -243,13 +244,14 @@ data MyAppState
   }
 
 
-runGraphics :: [Flag] -> (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> IO ()
+runGraphics :: [EngineFlag] -> (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> IO ()
 runGraphics flags startGame = do
   let app = App
         { windowName = "Some Roguelike"
         , windowSize = (800, 600)
         , flags
         , syncMode = VSync
+        , maxFramesInFlight = 2
         , appNewWindow = myAppNewWindow
         , appMainThreadHook = myAppMainThreadHook
         , appStart = myAppStart startGame

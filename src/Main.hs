@@ -1,6 +1,6 @@
 module Main where
 
-import           Lib.Engine.Config
+import           Lib.Engine.Main (EngineFlag(..))
 import           Control.Concurrent
 import           Graphics
 import           Game
