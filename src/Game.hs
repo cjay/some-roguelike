@@ -176,14 +176,15 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
 
 camStep :: V2 Float -> V2 Float -> V2 Float
 camStep playerPos camPos = camPos''
-  where baseSpeed = 2.5 -- approach speed in cells per second at distance 1
-        minSpeed = 1.5
-        dist :: V2 Float = playerPos - camPos
-        vel :: V2 Float = pure baseSpeed * dist -- inherits sign of dist
-        vel' = fmap (max minSpeed . abs) vel * signum vel
-        step = vel' / pure (fromIntegral tickRate)
-        camAt' = camPos + step
-        -- now prevent overshoot
-        dist' = playerPos - camAt'
-        snap _ax = if signum (dist'^._ax) == signum (dist^._ax) then camAt'^._ax else playerPos^._ax
-        camPos'' = V2 (snap _x) (snap _y)
+  where
+    baseSpeed = 2.5 -- approach speed in cells per second at distance 1
+    minSpeed = 1.5
+    dist :: V2 Float = playerPos - camPos
+    vel :: V2 Float = pure baseSpeed * dist -- inherits sign of dist
+    vel' = fmap (max minSpeed . abs) vel * signum vel
+    step = vel' / pure (fromIntegral tickRate)
+    camAt' = camPos + step
+    -- now prevent overshoot
+    dist' = playerPos - camAt'
+    snap _ax = if signum (dist'^._ax) == signum (dist^._ax) then camAt'^._ax else playerPos^._ax
+    camPos'' = V2 (snap _x) (snap _y)
