@@ -14,4 +14,4 @@ startGame events = do
   return (viewModel, viewState)
 
 main :: IO ()
-main = runGraphics [] startGame
+main = runGraphics [Validation] startGame

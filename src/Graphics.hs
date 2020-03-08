@@ -1,20 +1,23 @@
 {-# LANGUAGE Strict #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 module Graphics
   ( runGraphics
   ) where
 
 import           Control.Concurrent       (forkIO)
 import           Control.Monad
+import           Foreign.Ptr              (castPtr)
 import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
+import           Numeric.DataFrame.IO
 
 import           Lib.Engine.Main
-import           Lib.Engine.Simple2D
 import           Lib.MonadIO.Chan
 import           Lib.MonadIO.MVar
 import           Lib.Program
+import           Lib.Program.Foreign
 import           Lib.Resource
 import           Lib.Utils                (orthogonalVk, scale)
 import           Lib.Vulkan.Descriptor
@@ -26,8 +29,6 @@ import           Lib.Vulkan.Presentation
 import           Lib.Vulkan.RenderPass
 import           Lib.Vulkan.Queue
 import           Lib.Vulkan.Shader
--- import           Lib.Vulkan.UniformBufferObject
-
 
 import           ViewModel
 
@@ -77,7 +78,7 @@ makePipelineLayouts dev = do
     -- descriptor set numbers 0,1,..
     [frameDSL, materialDSL]
     -- push constant ranges
-    [ pushConstantRange VK_SHADER_STAGE_VERTEX_BIT 0 64
+    [ pushConstantRange VK_SHADER_STAGE_VERTEX_BIT 0 96
     ]
 
   -- (transObjMems, transObjBufs) <- unzip <$> uboCreateBuffers pdev dev transObjSize maxFramesInFlight
@@ -94,7 +95,7 @@ makePipelineLayouts dev = do
 
 loadAssets :: EngineCapability -> VkDescriptorSetLayout -> Program r Assets
 loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = do
-  let texturePaths = map ("textures/" ++) ["texture.jpg", "texture2.jpg", "sprite.png"]
+  let texturePaths = map ("textures/" ++) ["spritesforyou.png"]
   (textureReadyEvents, descrTextureInfos) <- auto $ unzip <$> mapM
     (createTextureInfo cap True) texturePaths
 
@@ -121,13 +122,18 @@ prepareRender :: EngineCapability
               -> Program r ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)], RenderContext)
 prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
   let SwapchainInfo { swapImgs, swapExtent, swapImgFormat } = swapInfo
-  msaaSamples <- getMaxUsableSampleCount pdev
+  -- MSAA seems to cause edge artifacts with texture atlasses. Sampling further
+  -- towards the tile center works, but requires dropping more than 1% of the
+  -- outer edge for some reason.
+  -- msaaSamples <- getMaxUsableSampleCount pdev
+  -- TODO 1 sample not allowed by validation, need way to turn off msaa properly
+  let msaaSamples = VK_SAMPLE_COUNT_1_BIT
   depthFormat <- findDepthFormat pdev
 
   swapImgViews <- auto $
     mapM (\image -> createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1) swapImgs
   renderPass <- auto $ createRenderPass dev swapImgFormat depthFormat msaaSamples
-  graphicsPipeline
+  pipeline
     <- auto $ createGraphicsPipeline dev swapExtent
                               [] []
                               shaderStages
@@ -149,39 +155,64 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
       . framebufferAttachments colorAttImgView depthAttImgView)
     swapImgViews
 
-  return (framebuffers, nextSems, RenderContext graphicsPipeline renderPass pipelineLayout swapExtent)
+  let renderContext = RenderContext { pipeline, renderPass, pipelineLayout, extent=swapExtent }
+  return (framebuffers, nextSems, renderContext)
 
 
 
-makeWorld :: ViewModel -> Assets -> Program r (Vec2f, [Object])
-makeWorld ViewModel {..} Assets {..} = do
+-- Id of per-material descriptor set
+materialSetId :: Word32
+materialSetId = 1
 
-  let objs = flip map walls $
-        \(Vec2 x y) ->
-          Object
-          { materialBindInfo = DescrBindInfo (materialDescrSets !! 1) []
-          , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
-          }
-      player = let Vec2 x y = playerPos in
-          Object
-          { materialBindInfo = DescrBindInfo (materialDescrSets !! 0) []
-          , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
-          }
-      dir = let Vec2 x y = playerPos + dirIndicator in
-          Object
-          { materialBindInfo = DescrBindInfo (materialDescrSets !! 2) []
-          , modelMatrix = scale 1 1 1 %* translate3 (vec3 (realToFrac x) (realToFrac y) 1)
-          }
+pushTransform :: VkCommandBuffer -> VkPipelineLayout -> Mat44f -> Program r ()
+pushTransform cmdBuf pipelineLayout df =
+  liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
+    (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 0 64 . castPtr)
 
-  -- a bit simplistic. when hot loading assets, better filter the objects that depend on them
-  events <- takeMVar loadEvents
-  notDone <- filterM (fmap not . isDone) events
-  let allDone = null notDone
-  putMVar loadEvents notDone
+pushPos :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program r ()
+pushPos cmdBuf pipelineLayout df =
+  liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
+    (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 64 8 . castPtr)
 
-  let V2 x y = camPos
+pushSize :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program r ()
+pushSize cmdBuf pipelineLayout df =
+  liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
+    (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 72 8 . castPtr)
 
-  return (Vec2 x y, if allDone then objs <> [player, dir] else [])
+pushUVPos :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program r ()
+pushUVPos cmdBuf pipelineLayout df =
+  liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
+    (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 80 8 . castPtr)
+
+pushUVSize :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program r ()
+pushUVSize cmdBuf pipelineLayout df =
+  liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
+    (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 88 8 . castPtr)
+
+
+data DescrBindInfo = DescrBindInfo
+  { descrSet       :: VkDescriptorSet
+  , dynamicOffsets :: [Word32]
+  }
+
+bindDescrSet :: VkCommandBuffer -> VkPipelineLayout -> Word32 -> DescrBindInfo -> Program r ()
+bindDescrSet cmdBuf pipelineLayout descrSetId DescrBindInfo{..} = locally $ do
+  descrSetPtr <- newArrayRes [descrSet]
+  let descrSetCnt = 1
+  let dynOffCnt = fromIntegral $ length dynamicOffsets
+  dynOffPtr <- newArrayRes dynamicOffsets
+  liftIO $ vkCmdBindDescriptorSets cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipelineLayout
+    descrSetId descrSetCnt descrSetPtr dynOffCnt dynOffPtr
+
+
+data RenderContext
+  = RenderContext
+  { pipeline       :: VkPipeline
+  , renderPass     :: VkRenderPass
+  , pipelineLayout :: VkPipelineLayout
+  , extent         :: VkExtent2D
+  }
+
 
 myAppNewWindow :: GLFW.Window -> Program r WindowState
 myAppNewWindow window = do
@@ -212,18 +243,69 @@ myAppNewSwapchain MyAppState{..} swapInfo = do
   swapMVar viewState $ ViewState { aspectRatio = extentToAspect (extent renderContext) }
   return (framebuffers, nextSems)
 
+
+
+recordSprite :: VkCommandBuffer -> Program r ()
+recordSprite cmdBuf =
+  liftIO $ vkCmdDraw cmdBuf
+    6 1 0 0 -- vertex count, instance count, first vertex, first instance
+
 myAppRecordFrame :: MyAppState -> VkCommandBuffer -> VkFramebuffer -> Program r ()
 myAppRecordFrame MyAppState{..} cmdBuf framebuffer = do
   let WindowState{..} = winState
 
-  vm@ViewModel{ camHeight } <- readMVar viewModel
-  (camPos, objs) <- makeWorld vm assets
+  ViewModel{..} <- readMVar viewModel
+  RenderContext{..} <- readMVar renderContextVar
 
-  renderContext <- readMVar renderContextVar
+  let texSize grid = pushUVSize cmdBuf pipelineLayout (0.999 * grid)
+      texPos grid p = pushUVPos cmdBuf pipelineLayout ((p + 0.0005) * grid)
+
+
+  let renderPassBeginInfo = createRenderPassBeginInfo renderPass framebuffer extent
+  withVkPtr renderPassBeginInfo $ \rpbiPtr ->
+    liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_INLINE
+
   ViewState { aspectRatio } <- readMVar viewState
   let viewSize = Vec2 (aspectRatio*camHeight) camHeight
-  viewProjTransform <- viewProjMatrix camPos viewSize
-  recordAll renderContext viewProjTransform objs cmdBuf framebuffer
+      V2 x y = camPos
+    in pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 x y) viewSize
+
+  let Assets {..} = assets
+      materialBindInfo = DescrBindInfo (materialDescrSets !! 0) []
+      tileGrid = recip (Vec2 8 8)
+      tilePos (Vec2 x y) = pushPos cmdBuf pipelineLayout (Vec2 (realToFrac x) (realToFrac y))
+
+  -- a bit simplistic. when hot loading assets, better filter the objects that depend on them
+  events <- takeMVar loadEvents
+  notDone <- filterM (fmap not . isDone) events
+  let allDone = null notDone
+  putMVar loadEvents notDone
+
+  when allDone $ do
+    liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
+    bindDescrSet cmdBuf pipelineLayout materialSetId materialBindInfo
+
+    pushSize cmdBuf pipelineLayout (vec2 1 1)
+    texSize tileGrid
+
+    -- walls
+    texPos tileGrid (Vec2 2 4)
+
+    forM_ walls $ \wallPos -> do
+      tilePos wallPos
+      recordSprite cmdBuf
+
+    -- player
+    texPos tileGrid (Vec2 1 1)
+    tilePos playerPos
+    recordSprite cmdBuf
+
+    -- dir
+    texPos tileGrid (Vec2 5 3)
+    tilePos (playerPos + dirIndicator)
+    recordSprite cmdBuf
+
+  liftIO $ vkCmdEndRenderPass cmdBuf
 
 data WindowState
   = WindowState
