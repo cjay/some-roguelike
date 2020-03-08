@@ -57,13 +57,18 @@ deriving instance Semigroup KeysDown
 
 newtype Direction = Direction (V2 Int)
 instance Component Direction where type Storage Direction = Global Direction
-instance Monoid Direction where mempty = Direction 0
+instance Monoid Direction where mempty = Direction $ V2 0 1
 instance Semigroup Direction where (<>) = error "unexpected use of Semigroup Direction <>"
+
+newtype PrevDir = PrevDir (V2 Int)
+instance Component PrevDir where type Storage PrevDir = Global PrevDir
+instance Monoid PrevDir where mempty = PrevDir $ V2 1 1
+instance Semigroup PrevDir where (<>) = error "unexpected use of Semigroup PrevDir <>"
 
 -- what about ''Camera? see Apecs.Gloss
 
 -- creates type World and function initWorld :: IO World
-makeWorld "World" [''Position, ''Player, ''Time, ''Level, ''KeysDown, ''Direction]
+makeWorld "World" [''Position, ''Player, ''Time, ''Level, ''KeysDown, ''Direction, ''PrevDir]
 
 type System' a = System World a
 
@@ -74,14 +79,14 @@ initialize = do
   _ <- newEntity (Player, Position (vec2 spawnX spawnY))
   set global $ Level level
 
-keyToMotion :: Key -> V2 Int
+keyToMotion :: Key -> Maybe (V2 Int)
 keyToMotion key =
   case key of
-    GLFW.Key'Left  -> V2 (-1) 0
-    GLFW.Key'Right -> V2 1 0
-    GLFW.Key'Up    -> V2 0 (-1)
-    GLFW.Key'Down  -> V2 0 1
-    _              -> 0
+    GLFW.Key'Left  -> Just $ V2 (-1) 0
+    GLFW.Key'Right -> Just $ V2 1 0
+    GLFW.Key'Up    -> Just $ V2 0 (-1)
+    GLFW.Key'Down  -> Just $ V2 0 1
+    _              -> Nothing
 
 handleEvent :: Event -> System' ()
 handleEvent (KeyEvent key keyState)
@@ -91,16 +96,21 @@ handleEvent (KeyEvent key keyState)
       let keysDown' = keysDown `union` [key]
       set global $ KeysDown keysDown'
       Direction dir <- get global
-      let dir'' =
-            let motion = keyToMotion key
-            in if motion == V2 0 0
-              then dir
-              else
-                let dir' = fmap signum $ dir + motion
-                in if dir' == V2 0 0 || dir' == dir then motion
-                    else dir'
-      set global $ Direction dir''
-      return ()
+      PrevDir prevDir <- get global
+      forM_ (keyToMotion key) $ \motion -> do
+        let dir' = signum $ dir + motion
+            dir''
+              -- opposite motion => preceding diagonal
+              | dir' == 0
+              = prevDir
+              -- stuck on diagonal => motion turns dir to horiz/vert
+              | dir' == dir
+              = motion
+              | otherwise
+              = dir'
+        set global $ Direction dir''
+        when (dir'' /= dir) $
+          set global $ PrevDir dir
   | keyState == GLFW.KeyState'Released
   = do
       KeysDown keysDown <- get global
