@@ -64,17 +64,12 @@ instance Component Direction where type Storage Direction = Global Direction
 instance Monoid Direction where mempty = Direction $ V2 0 1
 instance Semigroup Direction where (<>) = error "unexpected use of Semigroup Direction <>"
 
-newtype PrevDir = PrevDir (V2 Int)
-instance Component PrevDir where type Storage PrevDir = Global PrevDir
-instance Monoid PrevDir where mempty = PrevDir $ V2 1 1
-instance Semigroup PrevDir where (<>) = error "unexpected use of Semigroup PrevDir <>"
-
 -- what about ''Camera? see Apecs.Gloss
 
 -- creates type World and function initWorld :: IO World
 makeWorld "World" [''Position, ''Player, ''Enemy,
                    ''Time, ''Level, ''KeysDown,
-                   ''Direction, ''PrevDir]
+                   ''Direction]
 
 type System' a = System World a
 
@@ -105,21 +100,18 @@ handleEvent (KeyEvent key keyState)
       let keysDown' = keysDown `union` [key]
       set global $ KeysDown keysDown'
       Direction dir <- get global
-      PrevDir prevDir <- get global
       forM_ (keyToMotion key) $ \motion -> do
         let dir' = signum $ dir + motion
             dir''
-              -- opposite motion => preceding diagonal
+              -- opposite motion => opposite dir
               | dir' == 0
-              = prevDir
+              = motion
               -- stuck on diagonal => motion turns dir to horiz/vert
               | dir' == dir
               = motion
               | otherwise
               = dir'
         set global $ Direction dir''
-        when (dir'' /= dir) $
-          set global $ PrevDir dir
   | keyState == GLFW.KeyState'Released
   = do
       KeysDown keysDown <- get global
