@@ -25,6 +25,7 @@ import qualified Graphics.UI.GLFW   as GLFW
 import           Linear.V2             (V2 (..), _x, _y)
 import qualified Math.Geometry.GridMap        as GridMap
 import           Numeric.Vector
+import           Safe                         (headMay)
 
 import Configuration
 import qualified Dungeon
@@ -154,9 +155,13 @@ runGame vmVar vsVar eventChan = do
 extractAll :: forall w m c a. (Members w m c, Get w m c) => (c -> a) -> SystemT w m [a]
 extractAll selector = cfold (\accum component -> selector component : accum) []
 
+-- | Extract a value from a component pattern if a matching entity exists.
+extract :: forall w m c a. (Members w m c, Get w m c) => (c -> a) -> SystemT w m (Maybe a)
+extract = fmap headMay . extractAll
+
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
 viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do
-  mayPos <- cfold (\_ (Player, Position pos) -> Just pos) Nothing
+  mayPos <- extract $ \(Player, Position pos) -> pos
   let Vec2 x y = case mayPos of
         Just pl -> pl
         Nothing -> error "player entity doesn't exist"
