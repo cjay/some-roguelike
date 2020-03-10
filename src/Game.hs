@@ -14,6 +14,7 @@ module Game
   ) where
 
 import           Apecs
+import           Apecs.Experimental.Reactive
 import           Data.Maybe
 import           Data.List (union, (\\))
 import           Control.Concurrent
@@ -23,6 +24,8 @@ import           Control.Monad.Random
 import           Graphics.UI.GLFW   (Key, KeyState)
 import qualified Graphics.UI.GLFW   as GLFW
 import           Linear.V2             (V2 (..), _x, _y)
+import qualified Math.Geometry.Grid           as Grid
+import           Math.Geometry.Grid.Octagonal (RectOctGrid, rectOctGrid)
 import qualified Math.Geometry.GridMap        as GridMap
 import           Numeric.Vector
 import           Safe                         (headMay)
@@ -32,12 +35,11 @@ import qualified Dungeon
 import ViewModel
 
 
-newtype Position = Position Vec2i deriving Show
-instance Component Position where type Storage Position = Map Position
+newtype Position = Position Vec2i deriving (Eq, Ord, Show)
+instance Component Position where type Storage Position = Reactive (OrdMap Position) (Map Position)
 
--- for now walls are static and live only in Global Level:
--- data Wall = Wall deriving Show
--- instance Component Wall where type Storage Wall = Map Wall
+data Wall = Wall deriving Show
+instance Component Wall where type Storage Wall = Map Wall
 
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
@@ -50,10 +52,10 @@ instance Semigroup Time where (<>) = error "unexpected use of Semigroup Time <>"
 instance Monoid Time where mempty = 0
 instance Component Time where type Storage Time = Global Time
 
-newtype Level = Level Dungeon.Level
-instance Component Level where type Storage Level = Global Level
-instance Monoid Level where mempty = Level $ Dungeon.emptyLvl 1 1
-instance Semigroup Level where (<>) = error "unexpected use of Semigroup Level <>"
+newtype Grid = Grid RectOctGrid
+instance Component Grid where type Storage Grid = Global Grid
+instance Monoid Grid where mempty = Grid $ rectOctGrid 0 0
+instance Semigroup Grid where (<>) = error "unexpected use of Semigroup Grid <>"
 
 newtype KeysDown = KeysDown [Key]
 instance Component KeysDown where type Storage KeysDown = Global KeysDown
@@ -68,21 +70,26 @@ instance Semigroup Direction where (<>) = error "unexpected use of Semigroup Dir
 -- what about ''Camera? see Apecs.Gloss
 
 -- creates type World and function initWorld :: IO World
-makeWorld "World" [''Position, ''Player, ''Enemy,
-                   ''Time, ''Level, ''KeysDown,
+makeWorld "World" [''Position, ''Wall, ''Player, ''Enemy,
+                   ''Time, ''Grid, ''KeysDown,
                    ''Direction]
 
 type System' a = System World a
 
 initialize :: System' ()
 initialize = do
-  level <- liftIO $ Dungeon.execLevelGen 100 100 (Dungeon.rndLvl 3 20 0.7)
+  let rows = 100
+      columns = 100
+  level <- liftIO $ Dungeon.execLevelGen columns rows (Dungeon.rndLvl 3 20 0.7)
+  let walls = map fst $ filter (isNothing . snd) $ Dungeon.allCells level
+  forM_ walls $ \pos ->
+    newEntity (Wall, Position pos)
   let (spawnX, spawnY) = head $ GridMap.keys . GridMap.filter isJust $ level
   _ <- newEntity (Player, Position (vec2 spawnX spawnY))
   replicateM_ 100 $ do
     place <- liftIO $ evalRandIO $ Dungeon.findRandomCell level isJust
     void $ newEntity (Enemy, Position (fst place))
-  set global $ Level level
+  set global $ Grid $ rectOctGrid rows columns
 
 keyToMotion :: Key -> Maybe (V2 Int)
 keyToMotion key =
@@ -125,9 +132,11 @@ handleEvent (Tick time) = set global (Time time)
 
 step :: Vec2i -> System' ()
 step motion = cmapM $ \(Player, Position pos) -> do
-  Level lvl <- get global
+  Grid grid <- get global
   let pos' = pos + motion
-  return $ if isJust (lvl `Dungeon.getCell` pos')
+      Vec2 x y = pos'
+  there <- whatsAt pos'
+  return $ if grid `Grid.contains` (x, y) && null there
     then Right $ Position pos'
     else Left ()
 
@@ -159,6 +168,10 @@ extractAll selector = cfold (\accum component -> selector component : accum) []
 extract :: forall w m c a. (Members w m c, Get w m c) => (c -> a) -> SystemT w m (Maybe a)
 extract = fmap headMay . extractAll
 
+-- | Get list of entities that have the given Position
+whatsAt :: Vec2i -> System' [Entity]
+whatsAt = withReactive . ordLookup . Position
+
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
 viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do
   mayPos <- extract $ \(Player, Position pos) -> pos
@@ -178,12 +191,12 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
       bound x =
         let x' = ceiling (abs x)
         in if x < 0 then - x' else x'
-      topLeftBound = Vec2 (bound left) (bound top)
-      bottomRightBound = Vec2 (bound right) (bound bottom)
-  Level lvl <- get global
-  let walls = map fst $
-        filter (isNothing . snd) $
-        Dungeon.allCellsBetween lvl topLeftBound bottomRightBound
+      idxs = [Vec2 x y | y <- [bound top..bound bottom], x <- [bound left..bound right]]
+  Grid grid <- get global
+  walls <- fmap catMaybes . forM idxs $ \idx -> do
+    ents <- whatsAt idx
+    isWall <- or <$> forM ents (\ent -> exists ent $ Proxy @Wall)
+    return $ if isWall then Just idx else Nothing
   enemies <- extractAll $ \(Enemy, Position pos) -> pos
   Direction (V2 dx dy) <- get global
   return ViewModel
