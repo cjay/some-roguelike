@@ -72,7 +72,7 @@ allCellsBetween lvl (Vec2 left top) (Vec2 right bottom) =
     (pos, join $ GridMap.lookup (x, y) lvl)
 
 emptyLvl :: Int -> Int -> Level
-emptyLvl w h = lazyGridMap (rectOctGrid w h) (replicate (w*h) Nothing)
+emptyLvl w h = lazyGridMap (rectOctGrid h w) (replicate (w*h) Nothing)
 
 execLevelGen :: Int -> Int -> LevelGen StdGen a -> IO Level
 execLevelGen w h gen = do
