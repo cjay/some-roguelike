@@ -19,6 +19,7 @@ import           Data.List (union, (\\))
 import           Control.Concurrent
 import           Control.Lens hiding (Level, set)
 import           Control.Monad
+import           Control.Monad.Random
 import           Graphics.UI.GLFW   (Key, KeyState)
 import qualified Graphics.UI.GLFW   as GLFW
 import           Linear.V2             (V2 (..), _x, _y)
@@ -39,6 +40,9 @@ instance Component Position where type Storage Position = Map Position
 
 data Player = Player deriving Show
 instance Component Player where type Storage Player = Unique Player
+
+data Enemy = Enemy deriving Show
+instance Component Enemy where type Storage Enemy = Map Enemy
 
 newtype Time = Time Double deriving (Show, Num)
 instance Semigroup Time where (<>) = error "unexpected use of Semigroup Time <>"
@@ -68,7 +72,9 @@ instance Semigroup PrevDir where (<>) = error "unexpected use of Semigroup PrevD
 -- what about ''Camera? see Apecs.Gloss
 
 -- creates type World and function initWorld :: IO World
-makeWorld "World" [''Position, ''Player, ''Time, ''Level, ''KeysDown, ''Direction, ''PrevDir]
+makeWorld "World" [''Position, ''Player, ''Enemy,
+                   ''Time, ''Level, ''KeysDown,
+                   ''Direction, ''PrevDir]
 
 type System' a = System World a
 
@@ -77,6 +83,9 @@ initialize = do
   level <- liftIO $ Dungeon.execLevelGen 100 100 (Dungeon.rndLvl 3 20 0.7)
   let (spawnX, spawnY) = head $ GridMap.keys . GridMap.filter isJust $ level
   _ <- newEntity (Player, Position (vec2 spawnX spawnY))
+  replicateM_ 100 $ do
+    place <- liftIO $ evalRandIO $ Dungeon.findRandomCell level isJust
+    void $ newEntity (Enemy, Position (fst place))
   set global $ Level level
 
 keyToMotion :: Key -> Maybe (V2 Int)
@@ -149,6 +158,10 @@ runGame vmVar vsVar eventChan = do
         newVm <- viewModelUpdate oldVm vs
         void $ liftIO $ swapMVar vmVar newVm
 
+-- | Extract list of values from a component pattern, one value per matching entity.
+extractAll :: forall w m c a. (Members w m c, Get w m c) => (c -> a) -> SystemT w m [a]
+extractAll selector = cfold (\accum component -> selector component : accum) []
+
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
 viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do
   mayPos <- cfold (\_ (Player, Position pos) -> Just pos) Nothing
@@ -174,6 +187,7 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
   let walls = map fst $
         filter (isNothing . snd) $
         Dungeon.allCellsBetween lvl topLeftBound bottomRightBound
+  enemies <- extractAll $ \(Enemy, Position pos) -> pos
   Direction (V2 dx dy) <- get global
   return ViewModel
     { camPos = camPos'
@@ -181,6 +195,7 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
     , playerPos = Vec2 x y
     , dirIndicator = Vec2 dx dy
     , walls
+    , enemies
     , initialized = True
     }
 

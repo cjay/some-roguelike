@@ -4,6 +4,7 @@ module Dungeon
   , execLevelGen
   , rndLvl
   , getCell
+  , findRandomCell
   , allCells
   , allCellsBetween
   , printRndLvl
@@ -47,6 +48,18 @@ getCell_ lvl idx =
 
 getCell :: Level -> Vec2i -> Cell
 getCell l (Vec2 x y) = getCell_ l (x, y)
+
+findRandomCell :: MonadRandom m => Level -> (Cell -> Bool) -> m (Vec2i, Cell)
+findRandomCell lvl approve = do
+  let (w, h) = Grid.size lvl
+      go = do
+        x <- getRandomR (0, w-1)
+        y <- getRandomR (0, h-1)
+        let cell = getCell_ lvl (x, y)
+        if approve cell
+          then return (Vec2 x y, cell)
+          else go
+  go
 
 allCells :: Level -> [(Vec2i, Cell)]
 allCells lvl = flip map (GridMap.toList lvl) $ \((x, y), c) ->

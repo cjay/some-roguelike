@@ -295,8 +295,15 @@ myAppRecordFrame MyAppState{..} cmdBuf framebuffer = do
       tilePos wallPos
       recordSprite cmdBuf
 
+    -- enemies
+    texPos tileGrid (Vec2 2 2)
+
+    forM_ enemies $ \pos -> do
+      tilePos pos
+      recordSprite cmdBuf
+
     -- player
-    texPos tileGrid (Vec2 1 1)
+    texPos tileGrid (Vec2 0 0)
     tilePos playerPos
     recordSprite cmdBuf
 

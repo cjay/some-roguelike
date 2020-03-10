@@ -13,6 +13,7 @@ data ViewModel
   , playerPos :: Vec2i
   , dirIndicator :: Vec2i
   , walls :: [Vec2i]
+  , enemies :: [Vec2i]
   , initialized :: Bool
   }
 
@@ -23,6 +24,7 @@ initialViewModel = ViewModel
   , playerPos = 0
   , dirIndicator = 0
   , walls = []
+  , enemies = []
   , initialized = False
   }
 
