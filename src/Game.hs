@@ -41,6 +41,7 @@ instance Component Position where type Storage Position = Reactive (OrdMap Posit
 
 -- | Get list of entities that have the given Position
 {-# INLINE whatsAt #-}
+-- stupid ordLookup drags in MonadIO
 whatsAt :: (MonadIO m, Has w m Position) => Vec2i -> SystemT w m [Entity]
 whatsAt = withReactive . ordLookup . Position
 
@@ -49,16 +50,29 @@ cmapAt :: forall w m cx cy. (MonadIO m, Has w m Position, Get w m cx, Set w m cy
        => Vec2i -> (cx -> cy) -> SystemT w m ()
 cmapAt pos f = whatsAt pos >>= flip cmapOver f
 
-{-# INLINE cmapAtM #-}
-cmapAtM :: forall w m cx cy. (MonadIO m, Has w m Position, Get w m cx, Set w m cy)
-       => Vec2i -> (cx -> SystemT w m cy) -> SystemT w m ()
-cmapAtM pos sys = whatsAt pos >>= flip cmapOverM sys
+{-# INLINE cmapMAt #-}
+cmapMAt :: forall w m cx cy. (MonadIO m, Has w m Position, Get w m cx, Set w m cy)
+        => Vec2i -> (cx -> SystemT w m cy) -> SystemT w m ()
+cmapMAt pos sys = whatsAt pos >>= flip cmapMOver sys
 
 {-# INLINE cfoldAt #-}
 cfoldAt :: forall w m c a. (MonadIO m, Has w m Position, Get w m c)
         => Vec2i -> (a -> c -> a) -> a -> SystemT w m a
 cfoldAt pos f a0 = whatsAt pos >>= \es -> cfoldOver es f a0
 
+{-# INLINE extractAt #-}
+extractAt :: forall w m c a. (MonadIO m, Has w m Position, Get w m c)
+          => Vec2i -> (c -> a) -> SystemT w m (Maybe a)
+extractAt pos selector = whatsAt pos >>= flip extractOver selector
+
+{-# INLINE extractAllAt #-}
+extractAllAt :: forall w m c a. (MonadIO m, Has w m Position, Get w m c)
+             => Vec2i -> (c -> a) -> SystemT w m [a]
+extractAllAt pos selector = whatsAt pos >>= flip extractAllOver selector
+
+{-# INLINE existsAt #-}
+existsAt :: forall w m c. (MonadIO m, Has w m Position, Get w m c) => Vec2i -> Proxy c -> SystemT w m Bool
+existsAt pos p = whatsAt pos >>= \es -> existsOver es p
 
 data Wall = Wall deriving Show
 instance Component Wall where type Storage Wall = Map Wall
@@ -229,8 +243,7 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
       idxs = [Vec2 x y | y <- [bound top..bound bottom], x <- [bound left..bound right]]
   Grid grid <- get global
   walls <- fmap catMaybes . forM idxs $ \idx -> do
-    ents <- whatsAt idx
-    isWall <- or <$> forM ents (\ent -> exists ent $ Proxy @Wall)
+    isWall <- existsAt idx $ Proxy @Wall
     return $ if isWall then Just idx else Nothing
   enemies <- extractAll $ \(Enemy, Position pos) -> pos
   Direction (V2 dx dy) <- get global
