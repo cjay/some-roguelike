@@ -148,19 +148,43 @@ handleEvent (KeyEvent key keyState)
       let keysDown' = keysDown \\ [key]
       set global $ KeysDown keysDown'
       Direction (V2 x y) <- get global
-      when (null keysDown' && keysDown == [GLFW.Key'Space]) $
+      when (null keysDown' && keysDown == [GLFW.Key'Space]) $ do
         step (Vec2 x y)
+        worldStep
 handleEvent (Tick time) = set global (Time time)
+
+
+allows :: RectOctGrid -> Vec2i -> Bool
+allows grid (Vec2 x y) = grid `Grid.contains` (x, y)
+
+gridAllows :: Vec2i -> System' Bool
+gridAllows pos = do
+  Grid grid <- get global
+  return $ grid `allows` pos
 
 step :: Vec2i -> System' ()
 step motion = cmapM $ \(Player, Position pos) -> do
-  Grid grid <- get global
   let pos' = pos + motion
-      Vec2 x y = pos'
   there <- whatsAt pos'
-  return $ if grid `Grid.contains` (x, y) && null there
+  ok <- gridAllows pos'
+  return $ if ok && null there
     then Right $ Position pos'
     else Left ()
+
+worldStep :: System' ()
+worldStep = cmapM $ \(Player, Position playerPos, Grid grid) -> do
+  cmapM $ \(Enemy, Position enemyPos) -> do
+    let deltaPos@(Vec2 dx dy) = playerPos - enemyPos
+        dist :: Float = sqrt (realToFrac $ dx*dx + dy*dy)
+    if dist < 5
+      then do
+        let pos' = enemyPos + signum deltaPos
+        there <- whatsAt pos'
+        return $ if grid `allows` pos' && null there
+          then Right $ Position pos'
+          else Left ()
+      else return $ Left ()
+  return ()
 
 runGame :: MVar ViewModel -> MVar ViewState -> Chan Event -> IO ()
 runGame vmVar vsVar eventChan = do
