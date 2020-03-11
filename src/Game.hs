@@ -14,6 +14,7 @@ module Game
   ) where
 
 import           Apecs
+import           ApecsExts
 import           Apecs.Experimental.Reactive
 import           Data.Maybe
 import           Data.List (union, (\\))
@@ -37,6 +38,27 @@ import ViewModel
 
 newtype Position = Position Vec2i deriving (Eq, Ord, Show)
 instance Component Position where type Storage Position = Reactive (OrdMap Position) (Map Position)
+
+-- | Get list of entities that have the given Position
+{-# INLINE whatsAt #-}
+whatsAt :: (MonadIO m, Has w m Position) => Vec2i -> SystemT w m [Entity]
+whatsAt = withReactive . ordLookup . Position
+
+{-# INLINE cmapAt #-}
+cmapAt :: forall w m cx cy. (MonadIO m, Has w m Position, Get w m cx, Set w m cy)
+       => Vec2i -> (cx -> cy) -> SystemT w m ()
+cmapAt pos f = whatsAt pos >>= flip cmapOver f
+
+{-# INLINE cmapAtM #-}
+cmapAtM :: forall w m cx cy. (MonadIO m, Has w m Position, Get w m cx, Set w m cy)
+       => Vec2i -> (cx -> SystemT w m cy) -> SystemT w m ()
+cmapAtM pos sys = whatsAt pos >>= flip cmapOverM sys
+
+{-# INLINE cfoldAt #-}
+cfoldAt :: forall w m c a. (MonadIO m, Has w m Position, Get w m c)
+        => Vec2i -> (a -> c -> a) -> a -> SystemT w m a
+cfoldAt pos f a0 = whatsAt pos >>= \es -> cfoldOver es f a0
+
 
 data Wall = Wall deriving Show
 instance Component Wall where type Storage Wall = Map Wall
@@ -160,17 +182,6 @@ runGame vmVar vsVar eventChan = do
         newVm <- viewModelUpdate oldVm vs
         void $ liftIO $ swapMVar vmVar newVm
 
--- | Extract list of values from a component pattern, one value per matching entity.
-extractAll :: forall w m c a. (Members w m c, Get w m c) => (c -> a) -> SystemT w m [a]
-extractAll selector = cfold (\accum component -> selector component : accum) []
-
--- | Extract a value from a component pattern if a matching entity exists.
-extract :: forall w m c a. (Members w m c, Get w m c) => (c -> a) -> SystemT w m (Maybe a)
-extract = fmap headMay . extractAll
-
--- | Get list of entities that have the given Position
-whatsAt :: Vec2i -> System' [Entity]
-whatsAt = withReactive . ordLookup . Position
 
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
 viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do
