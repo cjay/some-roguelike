@@ -9,6 +9,7 @@ import           Control.Monad
 import           Foreign.Ptr              (castPtr)
 import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
+import           Graphics.Vulkan.Ext.VK_KHR_swapchain
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 import           Numeric.DataFrame.IO
@@ -20,13 +21,15 @@ import           Lib.Program
 import           Lib.Program.Foreign
 import           Lib.Resource
 import           Lib.Utils                (orthogonalVk, scale)
+import           Lib.Vulkan.Default.Pipeline
+import           Lib.Vulkan.Default.RenderPass
 import           Lib.Vulkan.Descriptor
 import           Lib.Vulkan.Device
 import           Lib.Vulkan.Engine
+import           Lib.Vulkan.Framebuffer
 import           Lib.Vulkan.Image
-import           Lib.Vulkan.Pipeline
+import           Lib.Vulkan.PipelineLayout
 import           Lib.Vulkan.Presentation
-import           Lib.Vulkan.RenderPass
 import           Lib.Vulkan.Queue
 import           Lib.Vulkan.Shader
 
@@ -126,13 +129,12 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
   -- towards the tile center works, but requires dropping more than 1% of the
   -- outer edge for some reason.
   -- msaaSamples <- getMaxUsableSampleCount pdev
-  -- TODO 1 sample not allowed by validation, need way to turn off msaa properly
   let msaaSamples = VK_SAMPLE_COUNT_1_BIT
   depthFormat <- findDepthFormat pdev
 
   swapImgViews <- auto $
     mapM (\image -> createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1) swapImgs
-  renderPass <- auto $ createRenderPass dev swapImgFormat depthFormat msaaSamples
+  renderPass <- auto $ createRenderPass dev swapImgFormat depthFormat msaaSamples VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
   pipeline
     <- auto $ createGraphicsPipeline dev swapExtent
                               [] []
@@ -142,17 +144,9 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
                               msaaSamples
                               True
 
-  (colorAttSem, colorAttImgView) <- auto $ createColorAttImgView cap
-                                    swapImgFormat swapExtent msaaSamples
-  (depthAttSem, depthAttImgView) <- auto $ createDepthAttImgView cap
-                                    swapExtent msaaSamples
-  let nextSems = [ (colorAttSem, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)
-                 , (depthAttSem, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT)
-                 ]
+  (nextSems, privAttachments) <- auto $ createPrivateAttachments cap swapExtent swapImgFormat msaaSamples
   framebuffers <- mapM
-    (auto
-      . createFramebuffer dev renderPass swapExtent
-      . framebufferAttachments colorAttImgView depthAttImgView)
+    (auto . createFramebuffer dev renderPass swapExtent . (privAttachments <>) . (:[]))
     swapImgViews
 
   let renderContext = RenderContext { pipeline, renderPass, pipelineLayout, extent=swapExtent }
