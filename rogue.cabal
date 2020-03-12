@@ -1,7 +1,8 @@
 name:                rogue
 version:             0.1.0.0
 synopsis:            Roguelike using Apecs and my experimental Vulkan engine
-description:         Please see README.md
+description:         The beginnings of a roguelike using https://github.com/cjay/vulkyrie
+homepage:            https://github.com/cjay/vulkyrie
 license:             BSD3
 license-file:        LICENSE
 author:              cjay
@@ -31,7 +32,7 @@ executable rogue
                      , safe
                      , vector
                      , vulkan-api
-                     , vulkan-engine
+                     , vulkyrie
   default-language:    Haskell2010
   default-extensions:  BlockArguments
                      , DataKinds
@@ -40,3 +41,6 @@ executable rogue
                      , RecordWildCards
                      , ScopedTypeVariables
                      , TypeApplications
+source-repository head
+    type:     git
+    location: https://github.com/cjay/some-roguelike.git

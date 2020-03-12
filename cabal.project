@@ -1,1 +1,6 @@
-packages: ., ../vulkan-engine
+packages: ., ../vulkyrie
+
+-- this crashes hie:
+-- source-repository-package
+--   type: git
+--   location: https://github.com/cjay/vulkyrie.git

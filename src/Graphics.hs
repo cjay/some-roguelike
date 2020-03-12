@@ -14,24 +14,24 @@ import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 import           Numeric.DataFrame.IO
 
-import           Lib.Engine.Main
-import           Lib.MonadIO.Chan
-import           Lib.MonadIO.MVar
-import           Lib.Program
-import           Lib.Program.Foreign
-import           Lib.Resource
-import           Lib.Utils                (orthogonalVk, scale)
-import           Lib.Vulkan.Default.Pipeline
-import           Lib.Vulkan.Default.RenderPass
-import           Lib.Vulkan.Descriptor
-import           Lib.Vulkan.Device
-import           Lib.Vulkan.Engine
-import           Lib.Vulkan.Framebuffer
-import           Lib.Vulkan.Image
-import           Lib.Vulkan.PipelineLayout
-import           Lib.Vulkan.Presentation
-import           Lib.Vulkan.Queue
-import           Lib.Vulkan.Shader
+import           Vulkyrie.Engine.Main
+import           Vulkyrie.MonadIO.Chan
+import           Vulkyrie.MonadIO.MVar
+import           Vulkyrie.Program
+import           Vulkyrie.Program.Foreign
+import           Vulkyrie.Resource
+import           Vulkyrie.Utils                (orthogonalVk, scale)
+import           Vulkyrie.Vulkan.Default.Pipeline
+import           Vulkyrie.Vulkan.Default.RenderPass
+import           Vulkyrie.Vulkan.Descriptor
+import           Vulkyrie.Vulkan.Device
+import           Vulkyrie.Vulkan.Engine
+import           Vulkyrie.Vulkan.Framebuffer
+import           Vulkyrie.Vulkan.Image
+import           Vulkyrie.Vulkan.PipelineLayout
+import           Vulkyrie.Vulkan.Presentation
+import           Vulkyrie.Vulkan.Queue
+import           Vulkyrie.Vulkan.Shader
 
 import           ViewModel
 

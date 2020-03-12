@@ -1,6 +1,6 @@
 module Main where
 
-import           Lib.Engine.Main (EngineFlag(..))
+import           Vulkyrie.Engine.Main (EngineFlag(..))
 import           Control.Concurrent
 import           Graphics
 import           Game
