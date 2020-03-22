@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE Strict #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 module Graphics
@@ -6,9 +7,11 @@ module Graphics
 
 import           Control.Concurrent       (forkIO)
 import           Control.Monad
+import           Data.Bits
 import           Foreign.Ptr              (castPtr)
 import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
+import           Graphics.Vulkan.Marshal.Create
 import           Graphics.Vulkan.Ext.VK_KHR_swapchain
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
@@ -21,6 +24,7 @@ import           Vulkyrie.Program
 import           Vulkyrie.Program.Foreign
 import           Vulkyrie.Resource
 import           Vulkyrie.Utils                (orthogonalVk, scale)
+import           Vulkyrie.Vulkan.Command
 import           Vulkyrie.Vulkan.Default.Pipeline
 import           Vulkyrie.Vulkan.Default.RenderPass
 import           Vulkyrie.Vulkan.Descriptor
@@ -244,8 +248,15 @@ recordSprite cmdBuf =
   liftIO $ vkCmdDraw cmdBuf
     6 1 0 0 -- vertex count, instance count, first vertex, first instance
 
-myAppRecordFrame :: MyAppState -> VkCommandBuffer -> VkFramebuffer -> Program r ()
-myAppRecordFrame MyAppState{..} cmdBuf framebuffer = do
+-- TODO for secondary buffers (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
+
+myAppRenderFrame :: MyAppState -> RenderFun
+myAppRenderFrame appState@MyAppState{ cap } framebuffer waitSemsWithStages signalSems =
+  postWith (cmdCap cap) (cmdQueue cap) waitSemsWithStages signalSems $ \cmdBuf ->
+    recordFrame appState cmdBuf framebuffer
+
+recordFrame :: MyAppState -> VkCommandBuffer -> VkFramebuffer -> Program r ()
+recordFrame MyAppState{..} cmdBuf framebuffer = do
   let WindowState{..} = winState
 
   ViewModel{..} <- readMVar viewModel
@@ -298,6 +309,9 @@ myAppRecordFrame MyAppState{..} cmdBuf framebuffer = do
 
     -- player
     texPos tileGrid (Vec2 0 0)
+    -- horizontal flipping (need to reset texSize after that):
+    -- texPos tileGrid (Vec2 4 0)
+    -- texSize $ Vec2 (-1) 1 * tileGrid
     tilePos playerPos
     recordSprite cmdBuf
 
@@ -339,6 +353,6 @@ runGraphics flags startGame = do
         , appMainThreadHook = myAppMainThreadHook
         , appStart = myAppStart startGame
         , appNewSwapchain = myAppNewSwapchain
-        , appRecordFrame = myAppRecordFrame
+        , appRenderFrame = myAppRenderFrame
         }
   runVulkanProgram app
