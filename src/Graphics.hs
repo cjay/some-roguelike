@@ -251,24 +251,62 @@ recordSprite cmdBuf =
 -- TODO for secondary buffers (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
 
 myAppRenderFrame :: MyAppState -> RenderFun
-myAppRenderFrame appState@MyAppState{ cap } framebuffer waitSemsWithStages signalSems =
-  postWith (cmdCap cap) (cmdQueue cap) waitSemsWithStages signalSems $ \cmdBuf ->
-    recordFrame appState cmdBuf framebuffer
+myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSemsWithStages signalSems = do
+  retBox <- newEmptyMVar
+  _ <- forkProg $ run retBox
+  takeMVar retBox
 
-recordFrame :: MyAppState -> VkCommandBuffer -> VkFramebuffer -> Program r ()
-recordFrame MyAppState{..} cmdBuf framebuffer = do
-  let WindowState{..} = winState
+  where
+  run retBox = do
+    let EngineCapability{ .. } = cap
+    managedCmdBuf <- acquireCommandBuffer cmdCap
+    let cmdBuf = actualCmdBuf managedCmdBuf
+    let cmdbBI = makeCommandBufferBeginInfo VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT Nothing
+    withVkPtr cmdbBI $ runVk . vkBeginCommandBuffer cmdBuf
 
+    RenderContext{ renderPass, extent } <- readMVar renderContextVar
+    let renderPassBeginInfo = createRenderPassBeginInfo renderPass framebuffer extent
+    withVkPtr renderPassBeginInfo $ \rpbiPtr ->
+      liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
+
+    -- for the secondary command buffers
+    cmdPool <- auto $ metaCommandPool dev queueFam VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+    let metaSecCmdBufs = metaCommandBuffers dev cmdPool VK_COMMAND_BUFFER_LEVEL_SECONDARY
+    secCmdBuf <- head <$> auto (metaSecCmdBufs 1)
+
+    let secCmdbBI =
+          makeCommandBufferBeginInfo
+            (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
+            (Just $
+              createVk @VkCommandBufferInheritanceInfo
+              $  set @"sType" VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO
+              &* set @"pNext" VK_NULL
+              &* set @"renderPass" renderPass
+              &* set @"subpass" 0
+              &* set @"framebuffer" framebuffer -- optional
+            )
+    withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer secCmdBuf
+    recordFrame appState secCmdBuf
+    runVk $ vkEndCommandBuffer secCmdBuf
+    liftIO $ thawDataFrame (scalar secCmdBuf) >>= flip withDataFramePtr (vkCmdExecuteCommands cmdBuf 1)
+
+    liftIO $ vkCmdEndRenderPass cmdBuf
+    runVk $ vkEndCommandBuffer cmdBuf
+
+    queueEvent <- postNotify cmdQueue $ makeSubmitInfo waitSemsWithStages signalSems [cmdBuf]
+    -- async return because caller doesn't care about internal cleanup
+    putMVar retBox queueEvent
+    waitDone queueEvent
+    releaseCommandBuffer managedCmdBuf
+    -- continuation ends because of forkProg. Auto things get deallocated.
+
+recordFrame :: MyAppState -> VkCommandBuffer -> Program r ()
+recordFrame MyAppState{..} cmdBuf = do
   ViewModel{..} <- readMVar viewModel
-  RenderContext{..} <- readMVar renderContextVar
+  RenderContext{ pipeline } <- readMVar renderContextVar
 
   let texSize grid = pushUVSize cmdBuf pipelineLayout (0.999 * grid)
       texPos grid p = pushUVPos cmdBuf pipelineLayout ((p + 0.0005) * grid)
-
-
-  let renderPassBeginInfo = createRenderPassBeginInfo renderPass framebuffer extent
-  withVkPtr renderPassBeginInfo $ \rpbiPtr ->
-    liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_INLINE
 
   ViewState { aspectRatio } <- readMVar viewState
   let viewSize = Vec2 (aspectRatio*camHeight) camHeight
@@ -319,8 +357,6 @@ recordFrame MyAppState{..} cmdBuf framebuffer = do
     texPos tileGrid (Vec2 5 3)
     tilePos (playerPos + dirIndicator)
     recordSprite cmdBuf
-
-  liftIO $ vkCmdEndRenderPass cmdBuf
 
 data WindowState
   = WindowState
