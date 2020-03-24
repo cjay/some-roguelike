@@ -1,5 +1,6 @@
 module ViewModel where
 
+import qualified Data.Vector.Storable as V
 import           Graphics.UI.GLFW   (Key, KeyState)
 import           Numeric.DataFrame
 import           Linear.V2             (V2 (..))
@@ -12,7 +13,7 @@ data ViewModel
   -- ^ requested height of the view in world coordinates
   , playerPos :: Vec2i
   , dirIndicator :: Vec2i
-  , walls :: [Vec2i]
+  , walls :: V.Vector Vec2i
   , enemies :: [Vec2i]
   , initialized :: Bool
   }
@@ -20,11 +21,11 @@ data ViewModel
 initialViewModel :: ViewModel
 initialViewModel = ViewModel
   { camPos = 0
-  , camHeight = 20
+  , camHeight = 200
   , playerPos = 0
   , dirIndicator = 0
-  , walls = []
-  , enemies = []
+  , walls = mempty
+  , enemies = mempty
   , initialized = False
   }
 

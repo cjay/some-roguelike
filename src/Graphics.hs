@@ -8,6 +8,7 @@ module Graphics
 import           Control.Concurrent       (forkIO)
 import           Control.Monad
 import           Data.Bits
+import qualified Data.Vector.Storable as VS
 import           Foreign.Ptr              (castPtr)
 import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
@@ -250,6 +251,34 @@ recordSprite cmdBuf =
 
 -- TODO for secondary buffers (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
 
+newSecondaryCmdBuf :: VkDevice -> Word32 -> Program r VkCommandBuffer
+newSecondaryCmdBuf dev queueFam = do
+    cmdPool <- auto $ metaCommandPool dev queueFam VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+    let metaSecCmdBufs = metaCommandBuffers dev cmdPool VK_COMMAND_BUFFER_LEVEL_SECONDARY
+    head <$> auto (metaSecCmdBufs 1)
+
+makeSecondaryCmdBeginInfo :: VkRenderPass -> Word32 -> Maybe VkFramebuffer -> VkCommandBufferBeginInfo
+makeSecondaryCmdBeginInfo renderPass subpassIndex mayFramebuffer =
+  makeCommandBufferBeginInfo
+    (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
+    (Just $
+      case mayFramebuffer of
+        -- TODO build a conditional field setter
+        Just framebuffer ->
+            createVk @VkCommandBufferInheritanceInfo
+            $  set @"sType" VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO
+            &* set @"pNext" VK_NULL
+            &* set @"renderPass" renderPass
+            &* set @"subpass" subpassIndex
+            &* set @"framebuffer" framebuffer -- optional
+        Nothing ->
+            createVk @VkCommandBufferInheritanceInfo
+            $  set @"sType" VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO
+            &* set @"pNext" VK_NULL
+            &* set @"renderPass" renderPass
+            &* set @"subpass" subpassIndex
+    )
+
 myAppRenderFrame :: MyAppState -> RenderFun
 myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSemsWithStages signalSems = do
   retBox <- newEmptyMVar
@@ -269,26 +298,15 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSe
     withVkPtr renderPassBeginInfo $ \rpbiPtr ->
       liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
 
-    -- for the secondary command buffers
-    cmdPool <- auto $ metaCommandPool dev queueFam VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
-    let metaSecCmdBufs = metaCommandBuffers dev cmdPool VK_COMMAND_BUFFER_LEVEL_SECONDARY
-    secCmdBuf <- head <$> auto (metaSecCmdBufs 1)
+    let secCmdbBI = makeSecondaryCmdBeginInfo renderPass 0 (Just framebuffer)
+        nBufs = 16
+    secCmdBufs <- VS.replicateM nBufs $ newSecondaryCmdBuf dev queueFam
+    VS.forM_ secCmdBufs $ \buf -> withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer buf
 
-    let secCmdbBI =
-          makeCommandBufferBeginInfo
-            (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
-            (Just $
-              createVk @VkCommandBufferInheritanceInfo
-              $  set @"sType" VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO
-              &* set @"pNext" VK_NULL
-              &* set @"renderPass" renderPass
-              &* set @"subpass" 0
-              &* set @"framebuffer" framebuffer -- optional
-            )
-    withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer secCmdBuf
-    recordFrame appState secCmdBuf
-    runVk $ vkEndCommandBuffer secCmdBuf
-    liftIO $ thawDataFrame (scalar secCmdBuf) >>= flip withDataFramePtr (vkCmdExecuteCommands cmdBuf 1)
+    recordFrame appState secCmdBufs
+
+    VS.forM_ secCmdBufs $ \buf -> runVk $ vkEndCommandBuffer buf
+    liftIO $ VS.unsafeWith secCmdBufs (vkCmdExecuteCommands cmdBuf (fromIntegral $ VS.length secCmdBufs))
 
     liftIO $ vkCmdEndRenderPass cmdBuf
     runVk $ vkEndCommandBuffer cmdBuf
@@ -300,23 +318,30 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSe
     releaseCommandBuffer managedCmdBuf
     -- continuation ends because of forkProg. Auto things get deallocated.
 
-recordFrame :: MyAppState -> VkCommandBuffer -> Program r ()
-recordFrame MyAppState{..} cmdBuf = do
+recordFrame :: MyAppState -> VS.Vector VkCommandBuffer -> Program r ()
+recordFrame MyAppState{..} cmdBufs = do
+
   ViewModel{..} <- readMVar viewModel
   RenderContext{ pipeline } <- readMVar renderContextVar
 
-  let texSize grid = pushUVSize cmdBuf pipelineLayout (0.999 * grid)
-      texPos grid p = pushUVPos cmdBuf pipelineLayout ((p + 0.0005) * grid)
-
-  ViewState { aspectRatio } <- readMVar viewState
-  let viewSize = Vec2 (aspectRatio*camHeight) camHeight
-      V2 x y = camPos
-    in pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 x y) viewSize
+  -- TODO when zoomed out very far, there are texture atlas edge artifacts again.
+  let texSize cmdBuf grid = pushUVSize cmdBuf pipelineLayout (0.999 * grid)
+      texPos cmdBuf grid p = pushUVPos cmdBuf pipelineLayout ((p + 0.0005) * grid)
 
   let Assets {..} = assets
       materialBindInfo = DescrBindInfo (materialDescrSets !! 0) []
       tileGrid = recip (Vec2 8 8)
-      tilePos (Vec2 x y) = pushPos cmdBuf pipelineLayout (Vec2 (realToFrac x) (realToFrac y))
+      tilePos cmdBuf (Vec2 x y) = pushPos cmdBuf pipelineLayout (Vec2 (realToFrac x) (realToFrac y))
+
+  ViewState { aspectRatio } <- readMVar viewState
+  VS.forM_ cmdBufs $ \cmdBuf -> do
+    let viewSize = Vec2 (aspectRatio*camHeight) camHeight
+        V2 x y = camPos
+      in pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 x y) viewSize
+    liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
+    bindDescrSet cmdBuf pipelineLayout materialSetId materialBindInfo
+
+    pushSize cmdBuf pipelineLayout (vec2 1 1)
 
   -- a bit simplistic. when hot loading assets, better filter the objects that depend on them
   events <- takeMVar loadEvents
@@ -324,39 +349,47 @@ recordFrame MyAppState{..} cmdBuf = do
   let allDone = null notDone
   putMVar loadEvents notDone
 
-  when allDone $ do
-    liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
-    bindDescrSet cmdBuf pipelineLayout materialSetId materialBindInfo
+  let groups n elems
+        | VS.null elems = []
+        | otherwise =
+          let (grp, rest) = VS.splitAt n elems
+          in grp : groups n rest
 
-    pushSize cmdBuf pipelineLayout (vec2 1 1)
-    texSize tileGrid
+  let cmdBuf0 = VS.head cmdBufs
+  when allDone $ do
+    texSize cmdBuf0 tileGrid
 
     -- walls
-    texPos tileGrid (Vec2 2 4)
-
-    forM_ walls $ \wallPos -> do
-      tilePos wallPos
-      recordSprite cmdBuf
+    let nThreads = fromIntegral $ VS.length cmdBufs
+        nWalls :: Float = fromIntegral $ VS.length walls
+        n :: Int = max 1 $ ceiling $ nWalls / nThreads
+        wallGroups = groups n walls
+    (mapM_ waitProg =<<) . forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, walls) ->
+      asyncProg $ do
+        texPos cmdBuf tileGrid (Vec2 2 4)
+        VS.forM_ walls $ \wallPos -> do
+          tilePos cmdBuf wallPos
+          recordSprite cmdBuf
 
     -- enemies
-    texPos tileGrid (Vec2 2 2)
+    texPos cmdBuf0 tileGrid (Vec2 2 2)
 
     forM_ enemies $ \pos -> do
-      tilePos pos
-      recordSprite cmdBuf
+      tilePos cmdBuf0 pos
+      recordSprite cmdBuf0
 
     -- player
-    texPos tileGrid (Vec2 0 0)
+    texPos cmdBuf0 tileGrid (Vec2 0 0)
     -- horizontal flipping (need to reset texSize after that):
     -- texPos tileGrid (Vec2 4 0)
     -- texSize $ Vec2 (-1) 1 * tileGrid
-    tilePos playerPos
-    recordSprite cmdBuf
+    tilePos cmdBuf0 playerPos
+    recordSprite cmdBuf0
 
     -- dir
-    texPos tileGrid (Vec2 5 3)
-    tilePos (playerPos + dirIndicator)
-    recordSprite cmdBuf
+    texPos cmdBuf0 tileGrid (Vec2 5 3)
+    tilePos cmdBuf0 (playerPos + dirIndicator)
+    recordSprite cmdBuf0
 
 data WindowState
   = WindowState

@@ -18,6 +18,7 @@ import           ApecsExts
 import           Apecs.Experimental.Reactive
 import           Data.Maybe
 import           Data.List (union, (\\))
+import qualified Data.Vector.Storable as V
 import           Control.Concurrent
 import           Control.Lens hiding (Level, set)
 import           Control.Monad
@@ -242,7 +243,7 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
         in if x < 0 then - x' else x'
       idxs = [Vec2 x y | y <- [bound top..bound bottom], x <- [bound left..bound right]]
   Grid grid <- get global
-  walls <- fmap catMaybes . forM idxs $ \idx -> do
+  walls <- (V.fromList <$>) . fmap catMaybes . forM idxs $ \idx -> do
     isWall <- existsAt idx $ Proxy @Wall
     return $ if isWall then Just idx else Nothing
   enemies <- extractAll $ \(Enemy, Position pos) -> pos
