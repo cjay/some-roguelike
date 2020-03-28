@@ -8,25 +8,24 @@ import           Linear.V2             (V2 (..))
 -- | This carries everything that flows from Game to Graphics
 data ViewModel
   = ViewModel
-  { camPos :: V2 Float
+  { camStep :: Float -> Maybe (V2 Float) -> V2 Float
+  -- ^ taking delta t in sec and old cam pos
   , camHeight :: Float
   -- ^ requested height of the view in world coordinates
   , playerPos :: Vec2i
   , dirIndicator :: Vec2i
   , walls :: V.Vector Vec2i
   , enemies :: [Vec2i]
-  , initialized :: Bool
   }
 
 initialViewModel :: ViewModel
 initialViewModel = ViewModel
-  { camPos = 0
-  , camHeight = 200
+  { camStep = const . const 0
+  , camHeight = 20
   , playerPos = 0
   , dirIndicator = 0
   , walls = mempty
   , enemies = mempty
-  , initialized = False
   }
 
 -- | This carries everything that flows from Graphics to Game
@@ -34,17 +33,15 @@ data ViewState
   = ViewState
   { aspectRatio :: Float
     -- ^ width/height of the window surface
+  , camPos :: Maybe (V2 Float)
   }
 
 initialViewState :: ViewState
 initialViewState = ViewState
   { aspectRatio = 16/9
+  , camPos = Nothing
   }
 
 data Event
   = KeyEvent Key KeyState
-  | Tick Double
-
-isTick :: Event -> Bool
-isTick (Tick _) = True
-isTick _ = False
+  | Begin

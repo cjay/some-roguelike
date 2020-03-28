@@ -26,6 +26,7 @@ import           Control.Monad.Random
 import           Graphics.UI.GLFW   (Key, KeyState)
 import qualified Graphics.UI.GLFW   as GLFW
 import           Linear.V2             (V2 (..), _x, _y)
+import           Linear.Metric (distance)
 import qualified Math.Geometry.Grid           as Grid
 import           Math.Geometry.Grid.Octagonal (RectOctGrid, rectOctGrid)
 import qualified Math.Geometry.GridMap        as GridMap
@@ -166,8 +167,8 @@ handleEvent (KeyEvent key keyState)
       when (null keysDown' && keysDown == [GLFW.Key'Space]) $ do
         step (Vec2 x y)
         worldStep
-handleEvent (Tick time) = set global (Time time)
-
+handleEvent Begin
+  = return ()
 
 allows :: RectOctGrid -> Vec2i -> Bool
 allows grid (Vec2 x y) = grid `Grid.contains` (x, y)
@@ -201,38 +202,32 @@ worldStep = cmapM $ \(Player, Position playerPos, Grid grid) -> do
       else return $ Left ()
   return ()
 
-runGame :: MVar ViewModel -> MVar ViewState -> Chan Event -> IO ()
-runGame vmVar vsVar eventChan = do
+runGame :: Chan Event -> MVar ViewModel -> MVar ViewState -> IO ()
+runGame eventChan vmVar vsVar = do
   w <- initWorld
-  _ <- forkIO $ forever $ do
-    threadDelay $ round (1 / realToFrac tickRate * 1e6)
-    t <- GLFW.getTime >>= \case
-      Just time -> return time
-      Nothing -> error "GLFW.getTime failed"
-    writeChan eventChan (Tick t)
+  writeChan eventChan Begin
   runWith w $ do
     initialize
     forever $ do
       event <- liftIO $ readChan eventChan
       handleEvent event
-      when (isTick event) $ do
-        oldVm <- liftIO $ readMVar vmVar
-        vs <- liftIO $ readMVar vsVar
-        newVm <- viewModelUpdate oldVm vs
-        void $ liftIO $ swapMVar vmVar newVm
+      oldVm <- liftIO $ readMVar vmVar
+      vs <- liftIO $ readMVar vsVar
+      newVm <- viewModelUpdate oldVm vs
+      void $ liftIO $ swapMVar vmVar newVm
 
 
 viewModelUpdate :: ViewModel -> ViewState -> System' ViewModel
-viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRatio } = do
+viewModelUpdate ViewModel{ camHeight } ViewState{ aspectRatio, camPos } = do
   mayPos <- extract $ \(Player, Position pos) -> pos
   let Vec2 x y = case mayPos of
         Just pl -> pl
         Nothing -> error "player entity doesn't exist"
-      camPos' = if initialized then camStep playerPos camPos else playerPos
-        where playerPos = fromIntegral <$> V2 x y
-      V2 camX camY = camPos'
+      playerPos = fromIntegral <$> V2 x y
+      camStep = makeCamStep playerPos
+      cam@(V2 camX camY) = fromMaybe playerPos camPos
       camWidth = aspectRatio * camHeight
-      margin = 1
+      margin = 1 + distance playerPos cam
       left = camX - 0.5 * camWidth - margin
       right = camX + 0.5 * camWidth + margin
       top = camY - 0.5 * camHeight - margin
@@ -249,24 +244,24 @@ viewModelUpdate ViewModel{ camHeight, camPos, initialized } ViewState{ aspectRat
   enemies <- extractAll $ \(Enemy, Position pos) -> pos
   Direction (V2 dx dy) <- get global
   return ViewModel
-    { camPos = camPos'
+    { camStep
     , camHeight
     , playerPos = Vec2 x y
     , dirIndicator = Vec2 dx dy
     , walls
     , enemies
-    , initialized = True
     }
 
-camStep :: V2 Float -> V2 Float -> V2 Float
-camStep playerPos camPos = camPos''
+makeCamStep :: V2 Float -> Float -> Maybe (V2 Float) -> V2 Float
+makeCamStep playerPos _ Nothing = playerPos
+makeCamStep playerPos deltaT (Just camPos) = camPos''
   where
     baseSpeed = 2.5 -- approach speed in cells per second at distance 1
     minSpeed = 1.5
     dist :: V2 Float = playerPos - camPos
     vel :: V2 Float = pure baseSpeed * dist -- inherits sign of dist
     vel' = fmap (max minSpeed . abs) vel * signum vel
-    step = vel' / pure (fromIntegral tickRate)
+    step = vel' * pure deltaT
     camAt' = camPos + step
     -- now prevent overshoot
     dist' = playerPos - camAt'

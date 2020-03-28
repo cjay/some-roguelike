@@ -9,6 +9,7 @@ import           Control.Concurrent       (forkIO)
 import           Control.Monad
 import           Data.Bits
 import qualified Data.Vector.Storable as VS
+import           Data.Functor                   ( (<&>) )
 import           Foreign.Ptr              (castPtr)
 import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
@@ -88,14 +89,6 @@ makePipelineLayouts dev = do
     -- push constant ranges
     [ pushConstantRange VK_SHADER_STAGE_VERTEX_BIT 0 96
     ]
-
-  -- (transObjMems, transObjBufs) <- unzip <$> uboCreateBuffers pdev dev transObjSize maxFramesInFlight
-  -- descriptorBufferInfos <- mapM (uboBufferInfo transObjSize) transObjBufs
-
-  -- frameDescrSets <- allocateDescriptorSetsForLayout dev descriptorPool maxFramesInFlight frameDSL
-
-  -- forM_ (zip descriptorBufferInfos frameDescrSets) $
-    -- \(bufInfo, descrSet) -> updateDescriptorSet dev descrSet 0 [bufInfo] []
 
   return (materialDSL, pipelineLayout)
 
@@ -213,25 +206,24 @@ data RenderContext
   }
 
 
-myAppNewWindow :: GLFW.Window -> Program r WindowState
-myAppNewWindow window = do
-  keyEvents <- newChan
+myAppNewWindow :: Chan Event -> GLFW.Window -> Program r WindowState
+myAppNewWindow eventChan window = do
   let keyCallback _ key _ keyState _ =
-        writeChan keyEvents $ KeyEvent key keyState
+        writeChan eventChan $ KeyEvent key keyState
   liftIO $ GLFW.setKeyCallback window (Just keyCallback)
   return WindowState {..}
 
 myAppMainThreadHook :: WindowState -> IO ()
 myAppMainThreadHook WindowState {..} = return ()
 
-myAppStart :: (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> WindowState -> EngineCapability -> Program r MyAppState
-myAppStart startGame winState@WindowState{ keyEvents } cap@EngineCapability{ dev } = do
+myAppStart :: MVar ViewModel -> MVar ViewState -> WindowState -> EngineCapability -> Program r MyAppState
+myAppStart viewModel viewState winState cap@EngineCapability{ dev } = do
   shaderStages <- loadShaders cap
   (materialDSL, pipelineLayout) <- makePipelineLayouts dev
   -- TODO beware of automatic resource lifetimes when making assets dynamic
   assets <- loadAssets cap materialDSL
   renderContextVar <- newEmptyMVar
-  (viewModel, viewState) <- liftIO $ startGame keyEvents
+  latestFrameTime <- newEmptyMVar
   return $ MyAppState{..}
 
 myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Program r ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
@@ -239,7 +231,8 @@ myAppNewSwapchain MyAppState{..} swapInfo = do
   _ <- tryTakeMVar renderContextVar
   (framebuffers, nextSems, renderContext) <- prepareRender cap swapInfo shaderStages pipelineLayout
   putMVar renderContextVar renderContext
-  swapMVar viewState $ ViewState { aspectRatio = extentToAspect (extent renderContext) }
+  oldVs <- takeMVar viewState
+  putMVar viewState $ oldVs { aspectRatio = extentToAspect (extent renderContext) }
   return (framebuffers, nextSems)
 
 
@@ -299,7 +292,7 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSe
       liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
 
     let secCmdbBI = makeSecondaryCmdBeginInfo renderPass 0 (Just framebuffer)
-        nBufs = 16
+        nBufs = 6
     secCmdBufs <- VS.replicateM nBufs $ newSecondaryCmdBuf dev queueFam
     VS.forM_ secCmdBufs $ \buf -> withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer buf
 
@@ -320,6 +313,13 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSe
 
 recordFrame :: MyAppState -> VS.Vector VkCommandBuffer -> Program r ()
 recordFrame MyAppState{..} cmdBufs = do
+  t <- liftIO $ GLFW.getTime >>= \case
+    Just time -> return time
+    Nothing -> error "GLFW.getTime failed"
+  deltaT <- tryTakeMVar latestFrameTime <&> \case
+    Just oldT -> realToFrac $ t - oldT
+    Nothing -> 0
+  putMVar latestFrameTime t
 
   ViewModel{..} <- readMVar viewModel
   RenderContext{ pipeline } <- readMVar renderContextVar
@@ -333,11 +333,12 @@ recordFrame MyAppState{..} cmdBufs = do
       tileGrid = recip (Vec2 8 8)
       tilePos cmdBuf (Vec2 x y) = pushPos cmdBuf pipelineLayout (Vec2 (realToFrac x) (realToFrac y))
 
-  ViewState { aspectRatio } <- readMVar viewState
+  oldVs@ViewState { aspectRatio, camPos } <- takeMVar viewState
+  let viewSize = Vec2 (aspectRatio*camHeight) camHeight
+      newCamPos@(V2 camX camY) = camStep deltaT camPos
+  putMVar viewState $ oldVs { camPos = Just newCamPos }
   VS.forM_ cmdBufs $ \cmdBuf -> do
-    let viewSize = Vec2 (aspectRatio*camHeight) camHeight
-        V2 x y = camPos
-      in pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 x y) viewSize
+    pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 camX camY) viewSize
     liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
     bindDescrSet cmdBuf pipelineLayout materialSetId materialBindInfo
 
@@ -394,7 +395,6 @@ recordFrame MyAppState{..} cmdBufs = do
 data WindowState
   = WindowState
   { window    :: GLFW.Window
-  , keyEvents :: Chan Event
   }
 
 data MyAppState
@@ -407,20 +407,22 @@ data MyAppState
   , winState         :: WindowState
   , viewModel        :: MVar ViewModel
   , viewState        :: MVar ViewState
+  , latestFrameTime  :: MVar Double
+    -- ^ in absolute time based on GLFW.getTime
   }
 
 
-runGraphics :: [EngineFlag] -> (Chan Event -> IO (MVar ViewModel, MVar ViewState)) -> IO ()
-runGraphics flags startGame = do
+runGraphics :: [EngineFlag] -> Chan Event -> MVar ViewModel -> MVar ViewState -> IO ()
+runGraphics flags eventChan viewModel viewState = do
   let app = App
         { windowName = "Some Roguelike"
         , windowSize = (800, 600)
         , flags
         , syncMode = VSync
         , maxFramesInFlight = 2
-        , appNewWindow = myAppNewWindow
+        , appNewWindow = myAppNewWindow eventChan
         , appMainThreadHook = myAppMainThreadHook
-        , appStart = myAppStart startGame
+        , appStart = myAppStart viewModel viewState
         , appNewSwapchain = myAppNewSwapchain
         , appRenderFrame = myAppRenderFrame
         }

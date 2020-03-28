@@ -2,16 +2,16 @@ module Main where
 
 import           Vulkyrie.Engine.Main (EngineFlag(..))
 import           Control.Concurrent
+import           Control.Monad                  ( void )
 import           Graphics
 import           Game
 import           ViewModel
 
-startGame :: Chan Event -> IO (MVar ViewModel, MVar ViewState)
-startGame events = do
+-- TODO the chan should be a bounded chan. millions of accumulated input events is an error condition.
+main :: IO ()
+main = do
   viewModel <- newMVar initialViewModel
   viewState <- newMVar initialViewState
-  _ <- forkIO $ runGame viewModel viewState events
-  return (viewModel, viewState)
-
-main :: IO ()
-main = runGraphics [] startGame
+  eventChan <- newChan
+  void . forkIO $ runGame eventChan viewModel viewState
+  runGraphics [] eventChan viewModel viewState
