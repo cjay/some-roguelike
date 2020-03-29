@@ -197,6 +197,7 @@ bindDescrSet cmdBuf pipelineLayout descrSetId DescrBindInfo{..} = locally $ do
     descrSetId descrSetCnt descrSetPtr dynOffCnt dynOffPtr
 
 
+-- | Stuff that is recreated by myAppNewSwapchain as a side effect
 data RenderContext
   = RenderContext
   { pipeline       :: VkPipeline
@@ -217,13 +218,17 @@ myAppMainThreadHook :: WindowState -> IO ()
 myAppMainThreadHook WindowState {..} = return ()
 
 myAppStart :: MVar ViewModel -> MVar ViewState -> WindowState -> EngineCapability -> Program r MyAppState
-myAppStart viewModel viewState winState cap@EngineCapability{ dev } = do
+myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = do
   shaderStages <- loadShaders cap
   (materialDSL, pipelineLayout) <- makePipelineLayouts dev
   -- TODO beware of automatic resource lifetimes when making assets dynamic
   assets <- loadAssets cap materialDSL
   renderContextVar <- newEmptyMVar
   latestFrameTime <- newEmptyMVar
+  secCmdBufsChan <- newChan
+  let nBufs = 6 -- TODO determine
+  let makeBufSet = VS.replicateM nBufs $ newSecondaryCmdBuf dev queueFam
+  writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight makeBufSet
   return $ MyAppState{..}
 
 myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Program r ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
@@ -246,12 +251,13 @@ recordSprite cmdBuf =
 
 newSecondaryCmdBuf :: VkDevice -> Word32 -> Program r VkCommandBuffer
 newSecondaryCmdBuf dev queueFam = do
-    cmdPool <- auto $ metaCommandPool dev queueFam VK_COMMAND_POOL_CREATE_TRANSIENT_BIT
+    cmdPool <- auto $ metaCommandPool dev queueFam
+      VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
     let metaSecCmdBufs = metaCommandBuffers dev cmdPool VK_COMMAND_BUFFER_LEVEL_SECONDARY
     head <$> auto (metaSecCmdBufs 1)
 
-makeSecondaryCmdBeginInfo :: VkRenderPass -> Word32 -> Maybe VkFramebuffer -> VkCommandBufferBeginInfo
-makeSecondaryCmdBeginInfo renderPass subpassIndex mayFramebuffer =
+makeSecondaryCmdBufBeginInfo :: VkRenderPass -> Word32 -> Maybe VkFramebuffer -> VkCommandBufferBeginInfo
+makeSecondaryCmdBufBeginInfo renderPass subpassIndex mayFramebuffer =
   makeCommandBufferBeginInfo
     (VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT .|. VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT)
     (Just $
@@ -273,7 +279,8 @@ makeSecondaryCmdBeginInfo renderPass subpassIndex mayFramebuffer =
     )
 
 myAppRenderFrame :: MyAppState -> RenderFun
-myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSemsWithStages signalSems = do
+myAppRenderFrame appState@MyAppState{ cap, renderContextVar, secCmdBufsChan }
+  framebuffer waitSemsWithStages signalSems = do
   retBox <- newEmptyMVar
   _ <- forkProg $ run retBox
   takeMVar retBox
@@ -291,14 +298,10 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSe
     withVkPtr renderPassBeginInfo $ \rpbiPtr ->
       liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
 
-    let secCmdbBI = makeSecondaryCmdBeginInfo renderPass 0 (Just framebuffer)
-        nBufs = 6
-    secCmdBufs <- VS.replicateM nBufs $ newSecondaryCmdBuf dev queueFam
-    VS.forM_ secCmdBufs $ \buf -> withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer buf
+    secCmdBufs <- readChan secCmdBufsChan
 
     recordFrame appState secCmdBufs
 
-    VS.forM_ secCmdBufs $ \buf -> runVk $ vkEndCommandBuffer buf
     liftIO $ VS.unsafeWith secCmdBufs (vkCmdExecuteCommands cmdBuf (fromIntegral $ VS.length secCmdBufs))
 
     liftIO $ vkCmdEndRenderPass cmdBuf
@@ -309,6 +312,7 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar } framebuffer waitSe
     putMVar retBox queueEvent
     waitDone queueEvent
     releaseCommandBuffer managedCmdBuf
+    writeChan secCmdBufsChan secCmdBufs
     -- continuation ends because of forkProg. Auto things get deallocated.
 
 recordFrame :: MyAppState -> VS.Vector VkCommandBuffer -> Program r ()
@@ -322,7 +326,7 @@ recordFrame MyAppState{..} cmdBufs = do
   putMVar latestFrameTime t
 
   ViewModel{..} <- readMVar viewModel
-  RenderContext{ pipeline } <- readMVar renderContextVar
+  RenderContext{ pipeline, renderPass } <- readMVar renderContextVar
 
   -- TODO when zoomed out very far, there are texture atlas edge artifacts again.
   let texSize cmdBuf grid = pushUVSize cmdBuf pipelineLayout (0.999 * grid)
@@ -337,12 +341,16 @@ recordFrame MyAppState{..} cmdBufs = do
   let viewSize = Vec2 (aspectRatio*camHeight) camHeight
       newCamPos@(V2 camX camY) = camStep deltaT camPos
   putMVar viewState $ oldVs { camPos = Just newCamPos }
-  VS.forM_ cmdBufs $ \cmdBuf -> do
+  -- TODO theoretically could premake secCmdbBI for each framebuffer
+  let secCmdbBI = makeSecondaryCmdBufBeginInfo renderPass 0 Nothing
+  (mapM_ waitProg =<<) . forM (VS.toList cmdBufs) $ \cmdBuf -> asyncProg $ do
+    withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer cmdBuf
     pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 camX camY) viewSize
     liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
     bindDescrSet cmdBuf pipelineLayout materialSetId materialBindInfo
 
     pushSize cmdBuf pipelineLayout (vec2 1 1)
+    texSize cmdBuf tileGrid
 
   -- a bit simplistic. when hot loading assets, better filter the objects that depend on them
   events <- takeMVar loadEvents
@@ -358,8 +366,6 @@ recordFrame MyAppState{..} cmdBufs = do
 
   let cmdBuf0 = VS.head cmdBufs
   when allDone $ do
-    texSize cmdBuf0 tileGrid
-
     -- walls
     let nThreads = fromIntegral $ VS.length cmdBufs
         nWalls :: Float = fromIntegral $ VS.length walls
@@ -392,6 +398,8 @@ recordFrame MyAppState{..} cmdBufs = do
     tilePos cmdBuf0 (playerPos + dirIndicator)
     recordSprite cmdBuf0
 
+  VS.forM_ cmdBufs $ \cmdBuf -> runVk $ vkEndCommandBuffer cmdBuf
+
 data WindowState
   = WindowState
   { window    :: GLFW.Window
@@ -402,6 +410,7 @@ data MyAppState
   { shaderStages     :: [VkPipelineShaderStageCreateInfo]
   , pipelineLayout   :: VkPipelineLayout
   , cap              :: EngineCapability
+  , secCmdBufsChan   :: Chan (VS.Vector VkCommandBuffer)
   , assets           :: Assets
   , renderContextVar :: MVar RenderContext
   , winState         :: WindowState
@@ -411,6 +420,7 @@ data MyAppState
     -- ^ in absolute time based on GLFW.getTime
   }
 
+maxFramesInFlight = 2
 
 runGraphics :: [EngineFlag] -> Chan Event -> MVar ViewModel -> MVar ViewState -> IO ()
 runGraphics flags eventChan viewModel viewState = do
@@ -419,7 +429,7 @@ runGraphics flags eventChan viewModel viewState = do
         , windowSize = (800, 600)
         , flags
         , syncMode = VSync
-        , maxFramesInFlight = 2
+        , maxFramesInFlight = Graphics.maxFramesInFlight
         , appNewWindow = myAppNewWindow eventChan
         , appMainThreadHook = myAppMainThreadHook
         , appStart = myAppStart viewModel viewState
