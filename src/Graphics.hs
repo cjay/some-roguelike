@@ -427,6 +427,7 @@ runGraphics flags eventChan viewModel viewState = do
   let app = App
         { windowName = "Some Roguelike"
         , windowSize = (800, 600)
+        , windowFullscreen = False
         , flags
         , syncMode = VSync
         , maxFramesInFlight = Graphics.maxFramesInFlight
