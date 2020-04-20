@@ -30,6 +30,7 @@ executable rogue
                      , MonadRandom
                      , mtl
                      , safe
+                     , unliftio
                      , vector
                      , vulkan-api
                      , vulkyrie
