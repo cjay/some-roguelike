@@ -5,7 +5,6 @@ module Graphics
   ( runGraphics
   ) where
 
-import           Control.Concurrent       (forkIO)
 import           Control.Monad
 import           Data.Bits
 import qualified Data.Vector.Storable as VS
@@ -18,7 +17,9 @@ import           Graphics.Vulkan.Ext.VK_KHR_swapchain
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 import           Numeric.DataFrame.IO
+import           UnliftIO.Async
 import           UnliftIO.Chan
+import           UnliftIO.Concurrent
 import           UnliftIO.MVar
 
 import           Vulkyrie.Engine.Main
@@ -57,28 +58,29 @@ viewProjMatrix (Vec2 x y) (Vec2 wx wy) = do
   return $ view %* proj
 
 
-loadShaders :: EngineCapability -> Program [VkPipelineShaderStageCreateInfo]
+loadShaders :: EngineCapability -> Resource [VkPipelineShaderStageCreateInfo]
 loadShaders EngineCapability{ dev } = do
     vertSM <- auto $ shaderModuleFile dev "shaders/sprites.vert.spv"
     fragSM <- auto $ shaderModuleFile dev "shaders/triangle.frag.spv"
 
-    shaderVert
-      <- createShaderStage vertSM
-            VK_SHADER_STAGE_VERTEX_BIT
-            Nothing
+    liftProg $ do
+      shaderVert
+        <- createShaderStage vertSM
+              VK_SHADER_STAGE_VERTEX_BIT
+              Nothing
 
-    shaderFrag
-      <- createShaderStage fragSM
-            VK_SHADER_STAGE_FRAGMENT_BIT
-            Nothing
+      shaderFrag
+        <- createShaderStage fragSM
+              VK_SHADER_STAGE_FRAGMENT_BIT
+              Nothing
 
-    logInfo $ "Createad vertex shader module: " ++ show shaderVert
-    logInfo $ "Createad fragment shader module: " ++ show shaderFrag
+      logInfo $ "Createad vertex shader module: " ++ show shaderVert
+      logInfo $ "Createad fragment shader module: " ++ show shaderFrag
 
-    return [shaderVert, shaderFrag]
+      return [shaderVert, shaderFrag]
 
 
-makePipelineLayouts :: VkDevice -> Program (VkDescriptorSetLayout, VkPipelineLayout)
+makePipelineLayouts :: VkDevice -> Resource (VkDescriptorSetLayout, VkPipelineLayout)
 makePipelineLayouts dev = do
   frameDSL <- auto $ createDescriptorSetLayout dev [] --[uniformBinding 0]
   -- TODO automate bind ids
@@ -94,20 +96,21 @@ makePipelineLayouts dev = do
 
 
 
-loadAssets :: EngineCapability -> VkDescriptorSetLayout -> Program Assets
+loadAssets :: EngineCapability -> VkDescriptorSetLayout -> Resource Assets
 loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = do
   let texturePaths = map ("textures/" ++) ["spritesforyou.png"]
   (textureReadyEvents, descrTextureInfos) <- auto $ unzip <$> mapM
     (createTextureInfo cap True) texturePaths
 
-  loadEvents <- newMVar textureReadyEvents
+  liftProg $ do
+    loadEvents <- newMVar textureReadyEvents
 
-  materialDescrSets <- allocateDescriptorSetsForLayout dev descriptorPool (length descrTextureInfos) materialDSL
+    materialDescrSets <- allocateDescriptorSetsForLayout dev descriptorPool (length descrTextureInfos) materialDSL
 
-  forM_ (zip descrTextureInfos materialDescrSets) $
-    \(texInfo, descrSet) -> updateDescriptorSet dev descrSet 0 [] [texInfo]
+    forM_ (zip descrTextureInfos materialDescrSets) $
+      \(texInfo, descrSet) -> updateDescriptorSet dev descrSet 0 [] [texInfo]
 
-  return $ Assets {..}
+    return $ Assets {..}
 
 data Assets
   = Assets
@@ -120,7 +123,7 @@ prepareRender :: EngineCapability
               -> SwapchainInfo
               -> [VkPipelineShaderStageCreateInfo]
               -> VkPipelineLayout
-              -> Program ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)], RenderContext)
+              -> Resource ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)], RenderContext)
 prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
   let SwapchainInfo { swapImgs, swapExtent, swapImgFormat } = swapInfo
   -- MSAA seems to cause edge artifacts with texture atlasses. Sampling further
@@ -128,7 +131,7 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
   -- outer edge for some reason.
   -- msaaSamples <- getMaxUsableSampleCount pdev
   let msaaSamples = VK_SAMPLE_COUNT_1_BIT
-  depthFormat <- findDepthFormat pdev
+  depthFormat <- liftProg $ findDepthFormat pdev
 
   swapImgViews <- auto $
     mapM (\image -> createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1) swapImgs
@@ -188,7 +191,7 @@ data DescrBindInfo = DescrBindInfo
   }
 
 bindDescrSet :: VkCommandBuffer -> VkPipelineLayout -> Word32 -> DescrBindInfo -> Program ()
-bindDescrSet cmdBuf pipelineLayout descrSetId DescrBindInfo{..} = locally $ do
+bindDescrSet cmdBuf pipelineLayout descrSetId DescrBindInfo{..} = runResource $ do
   descrSetPtr <- newArrayRes [descrSet]
   let descrSetCnt = 1
   let dynOffCnt = fromIntegral $ length dynamicOffsets
@@ -207,7 +210,7 @@ data RenderContext
   }
 
 
-myAppNewWindow :: Chan Event -> GLFW.Window -> Program WindowState
+myAppNewWindow :: Chan Event -> GLFW.Window -> Resource WindowState
 myAppNewWindow eventChan window = do
   let keyCallback _ key _ keyState _ =
         writeChan eventChan $ KeyEvent key keyState
@@ -217,7 +220,7 @@ myAppNewWindow eventChan window = do
 myAppMainThreadHook :: WindowState -> IO ()
 myAppMainThreadHook WindowState {..} = return ()
 
-myAppStart :: MVar ViewModel -> MVar ViewState -> WindowState -> EngineCapability -> Program MyAppState
+myAppStart :: MVar ViewModel -> MVar ViewState -> WindowState -> EngineCapability -> Resource MyAppState
 myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = do
   shaderStages <- loadShaders cap
   (materialDSL, pipelineLayout) <- makePipelineLayouts dev
@@ -231,7 +234,7 @@ myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = 
   writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight makeBufSet
   return $ MyAppState{..}
 
-myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Program ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
+myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Resource ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
 myAppNewSwapchain MyAppState{..} swapInfo = do
   _ <- tryTakeMVar renderContextVar
   (framebuffers, nextSems, renderContext) <- prepareRender cap swapInfo shaderStages pipelineLayout
@@ -247,7 +250,7 @@ recordSprite cmdBuf =
   liftIO $ vkCmdDraw cmdBuf
     6 1 0 0 -- vertex count, instance count, first vertex, first instance
 
-newSecondaryCmdBuf :: VkDevice -> Word32 -> Program VkCommandBuffer
+newSecondaryCmdBuf :: VkDevice -> Word32 -> Resource VkCommandBuffer
 newSecondaryCmdBuf dev queueFam = do
     cmdPool <- auto $ metaCommandPool dev queueFam
       VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
@@ -280,7 +283,7 @@ myAppRenderFrame :: MyAppState -> RenderFun
 myAppRenderFrame appState@MyAppState{ cap, renderContextVar, secCmdBufsChan }
   framebuffer waitSemsWithStages signalSems = do
   retBox <- newEmptyMVar
-  _ <- forkProg $ run retBox
+  _ <- forkIO $ run retBox
   takeMVar retBox
 
   where
@@ -341,7 +344,7 @@ recordFrame MyAppState{..} cmdBufs = do
   putMVar viewState $ oldVs { camPos = Just newCamPos }
   -- TODO theoretically could premake secCmdbBI for each framebuffer
   let secCmdbBI = makeSecondaryCmdBufBeginInfo renderPass 0 Nothing
-  (mapM_ waitProg =<<) . forM (VS.toList cmdBufs) $ \cmdBuf -> asyncProg $ do
+  mapM_ wait <=< forM (VS.toList cmdBufs) $ \cmdBuf -> async $ do
     withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer cmdBuf
     pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 camX camY) viewSize
     liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
@@ -369,8 +372,8 @@ recordFrame MyAppState{..} cmdBufs = do
         nWalls :: Float = fromIntegral $ VS.length walls
         n :: Int = max 1 $ ceiling $ nWalls / nThreads
         wallGroups = groups n walls
-    (mapM_ waitProg =<<) . forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, walls) ->
-      asyncProg $ do
+    mapM_ wait <=< forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, walls) ->
+      async $ do
         texPos cmdBuf tileGrid (Vec2 2 4)
         VS.forM_ walls $ \wallPos -> do
           tilePos cmdBuf wallPos
