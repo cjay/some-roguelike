@@ -39,6 +39,7 @@ executable rogue
                      , DataKinds
                      , LambdaCase
                      , NamedFieldPuns
+                     , OverloadedStrings
                      , RecordWildCards
                      , ScopedTypeVariables
                      , TypeApplications

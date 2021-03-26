@@ -50,7 +50,7 @@ extentToAspect extent =
 
 -- | cam pos and cam size in world coordinates -> ortho projection from z 0.1 to
 --   10 excluding boundaries.
-viewProjMatrix :: Vec2f -> Vec2f -> Program Mat44f
+viewProjMatrix :: Vec2f -> Vec2f -> Prog r Mat44f
 viewProjMatrix (Vec2 x y) (Vec2 wx wy) = do
   let camPos = Vec3 x y 0
       view = translate3 (- camPos)
@@ -59,29 +59,28 @@ viewProjMatrix (Vec2 x y) (Vec2 wx wy) = do
 
 
 loadShaders :: EngineCapability -> Resource [VkPipelineShaderStageCreateInfo]
-loadShaders EngineCapability{ dev } = do
+loadShaders EngineCapability{ dev } = Resource $ do
     vertSM <- auto $ shaderModuleFile dev "shaders/sprites.vert.spv"
     fragSM <- auto $ shaderModuleFile dev "shaders/triangle.frag.spv"
 
-    liftProg $ do
-      shaderVert
-        <- createShaderStage vertSM
-              VK_SHADER_STAGE_VERTEX_BIT
-              Nothing
+    shaderVert
+      <- createShaderStage vertSM
+            VK_SHADER_STAGE_VERTEX_BIT
+            Nothing
 
-      shaderFrag
-        <- createShaderStage fragSM
-              VK_SHADER_STAGE_FRAGMENT_BIT
-              Nothing
+    shaderFrag
+      <- createShaderStage fragSM
+            VK_SHADER_STAGE_FRAGMENT_BIT
+            Nothing
 
-      logInfo $ "Createad vertex shader module: " ++ show shaderVert
-      logInfo $ "Createad fragment shader module: " ++ show shaderFrag
+    logInfo $ "Createad vertex shader module: " <> showt shaderVert
+    logInfo $ "Createad fragment shader module: " <> showt shaderFrag
 
-      return [shaderVert, shaderFrag]
+    return [shaderVert, shaderFrag]
 
 
 makePipelineLayouts :: VkDevice -> Resource (VkDescriptorSetLayout, VkPipelineLayout)
-makePipelineLayouts dev = do
+makePipelineLayouts dev = Resource $ do
   frameDSL <- auto $ createDescriptorSetLayout dev [] --[uniformBinding 0]
   -- TODO automate bind ids
   materialDSL <- auto $ createDescriptorSetLayout dev [samplerBinding 0]
@@ -97,20 +96,19 @@ makePipelineLayouts dev = do
 
 
 loadAssets :: EngineCapability -> VkDescriptorSetLayout -> Resource Assets
-loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = do
+loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = Resource $ do
   let texturePaths = map ("textures/" ++) ["spritesforyou.png"]
   (textureReadyEvents, descrTextureInfos) <- auto $ unzip <$> mapM
-    (createTextureInfo cap True) texturePaths
+    (auto . createTextureInfo cap True) texturePaths
 
-  liftProg $ do
-    loadEvents <- newMVar textureReadyEvents
+  loadEvents <- newMVar textureReadyEvents
 
-    materialDescrSets <- allocateDescriptorSetsForLayout dev descriptorPool (length descrTextureInfos) materialDSL
+  materialDescrSets <- allocateDescriptorSetsForLayout dev descriptorPool (length descrTextureInfos) materialDSL
 
-    forM_ (zip descrTextureInfos materialDescrSets) $
-      \(texInfo, descrSet) -> updateDescriptorSet dev descrSet 0 [] [texInfo]
+  forM_ (zip descrTextureInfos materialDescrSets) $
+    \(texInfo, descrSet) -> updateDescriptorSet dev descrSet 0 [] [texInfo]
 
-    return $ Assets {..}
+  return $ Assets {..}
 
 data Assets
   = Assets
@@ -124,17 +122,17 @@ prepareRender :: EngineCapability
               -> [VkPipelineShaderStageCreateInfo]
               -> VkPipelineLayout
               -> Resource ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)], RenderContext)
-prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
+prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = Resource $ do
   let SwapchainInfo { swapImgs, swapExtent, swapImgFormat } = swapInfo
   -- MSAA seems to cause edge artifacts with texture atlasses. Sampling further
   -- towards the tile center works, but requires dropping more than 1% of the
   -- outer edge for some reason.
   -- msaaSamples <- getMaxUsableSampleCount pdev
   let msaaSamples = VK_SAMPLE_COUNT_1_BIT
-  depthFormat <- liftProg $ findDepthFormat pdev
+  depthFormat <- findDepthFormat pdev
 
-  swapImgViews <- auto $
-    mapM (\image -> createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1) swapImgs
+  swapImgViews <-
+    mapM (\image -> auto $ createImageView dev image swapImgFormat VK_IMAGE_ASPECT_COLOR_BIT 1) swapImgs
   renderPass <- auto $ createRenderPass dev swapImgFormat depthFormat msaaSamples VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
   pipeline
     <- auto $ createGraphicsPipeline dev swapExtent
@@ -159,27 +157,27 @@ prepareRender cap@EngineCapability{..} swapInfo shaderStages pipelineLayout = do
 materialSetId :: Word32
 materialSetId = 1
 
-pushTransform :: VkCommandBuffer -> VkPipelineLayout -> Mat44f -> Program ()
+pushTransform :: VkCommandBuffer -> VkPipelineLayout -> Mat44f -> Prog r ()
 pushTransform cmdBuf pipelineLayout df =
   liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
     (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 0 64 . castPtr)
 
-pushPos :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program ()
+pushPos :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Prog r ()
 pushPos cmdBuf pipelineLayout df =
   liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
     (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 64 8 . castPtr)
 
-pushSize :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program ()
+pushSize :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Prog r ()
 pushSize cmdBuf pipelineLayout df =
   liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
     (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 72 8 . castPtr)
 
-pushUVPos :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program ()
+pushUVPos :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Prog r ()
 pushUVPos cmdBuf pipelineLayout df =
   liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
     (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 80 8 . castPtr)
 
-pushUVSize :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Program ()
+pushUVSize :: VkCommandBuffer -> VkPipelineLayout -> Vec2f -> Prog r ()
 pushUVSize cmdBuf pipelineLayout df =
   liftIO $ thawPinDataFrame df >>= flip withDataFramePtr
     (vkCmdPushConstants cmdBuf pipelineLayout VK_SHADER_STAGE_VERTEX_BIT 88 8 . castPtr)
@@ -190,12 +188,12 @@ data DescrBindInfo = DescrBindInfo
   , dynamicOffsets :: [Word32]
   }
 
-bindDescrSet :: VkCommandBuffer -> VkPipelineLayout -> Word32 -> DescrBindInfo -> Program ()
-bindDescrSet cmdBuf pipelineLayout descrSetId DescrBindInfo{..} = runResource $ do
-  descrSetPtr <- newArrayRes [descrSet]
+bindDescrSet :: VkCommandBuffer -> VkPipelineLayout -> Word32 -> DescrBindInfo -> Prog r ()
+bindDescrSet cmdBuf pipelineLayout descrSetId DescrBindInfo{..} = region $ do
+  descrSetPtr <- auto $ newArrayRes [descrSet]
   let descrSetCnt = 1
   let dynOffCnt = fromIntegral $ length dynamicOffsets
-  dynOffPtr <- newArrayRes dynamicOffsets
+  dynOffPtr <- auto $ newArrayRes dynamicOffsets
   liftIO $ vkCmdBindDescriptorSets cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipelineLayout
     descrSetId descrSetCnt descrSetPtr dynOffCnt dynOffPtr
 
@@ -211,7 +209,7 @@ data RenderContext
 
 
 myAppNewWindow :: Chan Event -> GLFW.Window -> Resource WindowState
-myAppNewWindow eventChan window = do
+myAppNewWindow eventChan window = Resource $ do
   let keyCallback _ key _ keyState _ =
         writeChan eventChan $ KeyEvent key keyState
   liftIO $ GLFW.setKeyCallback window (Just keyCallback)
@@ -221,23 +219,23 @@ myAppMainThreadHook :: WindowState -> IO ()
 myAppMainThreadHook WindowState {..} = return ()
 
 myAppStart :: MVar ViewModel -> MVar ViewState -> WindowState -> EngineCapability -> Resource MyAppState
-myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = do
-  shaderStages <- loadShaders cap
-  (materialDSL, pipelineLayout) <- makePipelineLayouts dev
+myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = Resource $ do
+  shaderStages <- auto $ loadShaders cap
+  (materialDSL, pipelineLayout) <- auto $ makePipelineLayouts dev
   -- TODO beware of automatic resource lifetimes when making assets dynamic
-  assets <- loadAssets cap materialDSL
+  assets <- auto $ loadAssets cap materialDSL
   renderContextVar <- newEmptyMVar
   latestFrameTime <- newEmptyMVar
   secCmdBufsChan <- newChan
   let nBufs = 6 -- TODO determine
-  let makeBufSet = VS.replicateM nBufs $ newSecondaryCmdBuf dev queueFam
-  writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight makeBufSet
+  let makeBufSet = VS.replicateM nBufs $ auto $ newSecondaryCmdBuf dev queueFam
+  writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight (auto makeBufSet)
   return $ MyAppState{..}
 
 myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Resource ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
-myAppNewSwapchain MyAppState{..} swapInfo = do
+myAppNewSwapchain MyAppState{..} swapInfo = Resource $ do
   _ <- tryTakeMVar renderContextVar
-  (framebuffers, nextSems, renderContext) <- prepareRender cap swapInfo shaderStages pipelineLayout
+  (framebuffers, nextSems, renderContext) <- auto $ prepareRender cap swapInfo shaderStages pipelineLayout
   putMVar renderContextVar renderContext
   oldVs <- takeMVar viewState
   putMVar viewState $ oldVs { aspectRatio = extentToAspect (extent renderContext) }
@@ -245,13 +243,13 @@ myAppNewSwapchain MyAppState{..} swapInfo = do
 
 
 
-recordSprite :: VkCommandBuffer -> Program ()
+recordSprite :: VkCommandBuffer -> Prog r ()
 recordSprite cmdBuf =
   liftIO $ vkCmdDraw cmdBuf
     6 1 0 0 -- vertex count, instance count, first vertex, first instance
 
 newSecondaryCmdBuf :: VkDevice -> Word32 -> Resource VkCommandBuffer
-newSecondaryCmdBuf dev queueFam = do
+newSecondaryCmdBuf dev queueFam = Resource $ do
     cmdPool <- auto $ metaCommandPool dev queueFam
       VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
     let metaSecCmdBufs = metaCommandBuffers dev cmdPool VK_COMMAND_BUFFER_LEVEL_SECONDARY
@@ -316,7 +314,7 @@ myAppRenderFrame appState@MyAppState{ cap, renderContextVar, secCmdBufsChan }
     writeChan secCmdBufsChan secCmdBufs
     -- continuation ends because of forkProg. Auto things get deallocated.
 
-recordFrame :: MyAppState -> VS.Vector VkCommandBuffer -> Program ()
+recordFrame :: MyAppState -> VS.Vector VkCommandBuffer -> Prog r ()
 recordFrame MyAppState{..} cmdBufs = do
   t <- liftIO $ GLFW.getTime >>= \case
     Just time -> return time
