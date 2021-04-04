@@ -41,6 +41,7 @@ import           Vulkyrie.Vulkan.Queue
 import           Vulkyrie.Vulkan.Shader
 
 import           ViewModel
+import Vulkyrie.Concurrent
 
 extentToAspect :: VkExtent2D -> Float
 extentToAspect extent =
@@ -230,6 +231,7 @@ myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = 
   let nBufs = 6 -- TODO determine
   let makeBufSet = VS.replicateM nBufs $ auto $ newSecondaryCmdBuf dev queueFam
   writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight (auto makeBufSet)
+  renderThreadOwner <- auto threadOwner
   return $ MyAppState{..}
 
 myAppNewSwapchain :: MyAppState -> SwapchainInfo -> Resource ([VkFramebuffer], [(VkSemaphore, VkPipelineStageBitmask a)])
@@ -278,41 +280,24 @@ makeSecondaryCmdBufBeginInfo renderPass subpassIndex mayFramebuffer =
     )
 
 myAppRenderFrame :: MyAppState -> RenderFun
-myAppRenderFrame appState@MyAppState{ cap, renderContextVar, secCmdBufsChan }
-  framebuffer waitSemsWithStages signalSems = do
-  retBox <- newEmptyMVar
-  _ <- forkIO $ run retBox
-  takeMVar retBox
+myAppRenderFrame appState@MyAppState{ cap, renderContextVar, secCmdBufsChan, renderThreadOwner }
+  framebuffer waitSemsWithStages signalSems =
+    postWith (cmdCap cap) (cmdQueue cap) waitSemsWithStages signalSems renderThreadOwner $
+    \cmdBuf -> Resource $ do
+      RenderContext{ renderPass, extent } <- readMVar renderContextVar
+      let renderPassBeginInfo = createRenderPassBeginInfo renderPass framebuffer extent
+      withVkPtr renderPassBeginInfo $ \rpbiPtr ->
+        liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
 
-  where
-  run retBox = do
-    let EngineCapability{ .. } = cap
-    managedCmdBuf <- acquireCommandBuffer cmdCap
-    let cmdBuf = actualCmdBuf managedCmdBuf
-    let cmdbBI = makeCommandBufferBeginInfo VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT Nothing
-    withVkPtr cmdbBI $ runVk . vkBeginCommandBuffer cmdBuf
+      secCmdBufs <- autoDestroyCreate
+        (\bufs -> writeChan secCmdBufsChan bufs)
+        (readChan secCmdBufsChan)
 
-    RenderContext{ renderPass, extent } <- readMVar renderContextVar
-    let renderPassBeginInfo = createRenderPassBeginInfo renderPass framebuffer extent
-    withVkPtr renderPassBeginInfo $ \rpbiPtr ->
-      liftIO $ vkCmdBeginRenderPass cmdBuf rpbiPtr VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS
+      recordFrame appState secCmdBufs
 
-    secCmdBufs <- readChan secCmdBufsChan
+      liftIO $ VS.unsafeWith secCmdBufs (vkCmdExecuteCommands cmdBuf (fromIntegral $ VS.length secCmdBufs))
 
-    recordFrame appState secCmdBufs
-
-    liftIO $ VS.unsafeWith secCmdBufs (vkCmdExecuteCommands cmdBuf (fromIntegral $ VS.length secCmdBufs))
-
-    liftIO $ vkCmdEndRenderPass cmdBuf
-    runVk $ vkEndCommandBuffer cmdBuf
-
-    queueEvent <- postNotify cmdQueue $ makeSubmitInfo waitSemsWithStages signalSems [cmdBuf]
-    -- async return because caller doesn't care about internal cleanup
-    putMVar retBox queueEvent
-    waitDone queueEvent
-    releaseCommandBuffer managedCmdBuf
-    writeChan secCmdBufsChan secCmdBufs
-    -- continuation ends because of forkProg. Auto things get deallocated.
+      liftIO $ vkCmdEndRenderPass cmdBuf
 
 recordFrame :: MyAppState -> VS.Vector VkCommandBuffer -> Prog r ()
 recordFrame MyAppState{..} cmdBufs = do
@@ -417,6 +402,7 @@ data MyAppState
   , viewState        :: MVar ViewState
   , latestFrameTime  :: MVar Double
     -- ^ in absolute time based on GLFW.getTime
+  , renderThreadOwner :: ThreadOwner
   }
 
 maxFramesInFlight = 2
