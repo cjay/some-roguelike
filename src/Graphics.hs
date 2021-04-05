@@ -99,7 +99,7 @@ makePipelineLayouts dev = Resource $ do
 loadAssets :: EngineCapability -> VkDescriptorSetLayout -> Resource Assets
 loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = Resource $ do
   let texturePaths = map ("textures/" ++) ["spritesforyou.png"]
-  (textureReadyEvents, descrTextureInfos) <- auto $ unzip <$> mapM
+  (textureReadyEvents, descrTextureInfos) <- unzip <$> mapM
     (auto . createTextureInfo cap True) texturePaths
 
   loadEvents <- newMVar textureReadyEvents
@@ -230,7 +230,7 @@ myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = 
   secCmdBufsChan <- newChan
   let nBufs = 6 -- TODO determine
   let makeBufSet = VS.replicateM nBufs $ auto $ newSecondaryCmdBuf dev queueFam
-  writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight (auto makeBufSet)
+  writeList2Chan secCmdBufsChan =<< replicateM Graphics.maxFramesInFlight makeBufSet
   renderThreadOwner <- auto threadOwner
   return $ MyAppState{..}
 
