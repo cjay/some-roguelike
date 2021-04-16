@@ -17,7 +17,7 @@ import           Graphics.Vulkan.Ext.VK_KHR_swapchain
 import           Linear.V2             (V2 (..), _x, _y)
 import           Numeric.DataFrame
 import           Numeric.DataFrame.IO
-import           UnliftIO.Async
+import           UnliftIO.Async as Async
 import           UnliftIO.Chan
 import           UnliftIO.Concurrent
 import           UnliftIO.MVar
@@ -327,7 +327,7 @@ recordFrame MyAppState{..} cmdBufs = do
   putMVar viewState $ oldVs { camPos = Just newCamPos }
   -- TODO theoretically could premake secCmdbBI for each framebuffer
   let secCmdbBI = makeSecondaryCmdBufBeginInfo renderPass 0 Nothing
-  mapM_ wait <=< forM (VS.toList cmdBufs) $ \cmdBuf -> async $ do
+  mapM_ Async.wait <=< forM (VS.toList cmdBufs) $ \cmdBuf -> async $ do
     withVkPtr secCmdbBI $ runVk . vkBeginCommandBuffer cmdBuf
     pushTransform cmdBuf pipelineLayout =<< viewProjMatrix (Vec2 camX camY) viewSize
     liftIO $ vkCmdBindPipeline cmdBuf VK_PIPELINE_BIND_POINT_GRAPHICS pipeline
@@ -355,7 +355,7 @@ recordFrame MyAppState{..} cmdBufs = do
         nWalls :: Float = fromIntegral $ VS.length walls
         n :: Int = max 1 $ ceiling $ nWalls / nThreads
         wallGroups = groups n walls
-    mapM_ wait <=< forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, walls) ->
+    mapM_ Async.wait <=< forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, walls) ->
       async $ do
         texPos cmdBuf tileGrid (Vec2 2 4)
         VS.forM_ walls $ \wallPos -> do
