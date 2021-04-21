@@ -14,24 +14,22 @@ import qualified Graphics.UI.GLFW         as GLFW
 import           Graphics.Vulkan.Core_1_0
 import           Graphics.Vulkan.Marshal.Create
 import           Graphics.Vulkan.Ext.VK_KHR_swapchain
-import           Linear.V2             (V2 (..), _x, _y)
+import           Linear.V2             (V2 (..))
 import           Numeric.DataFrame
 import           Numeric.DataFrame.IO
 import           UnliftIO.Async as Async
 import           UnliftIO.Chan
 import           UnliftIO.Concurrent
-import           UnliftIO.MVar
 
 import           Vulkyrie.Engine.Main
 import           Vulkyrie.Program
 import           Vulkyrie.Program.Foreign
 import           Vulkyrie.Resource
-import           Vulkyrie.Utils                (orthogonalVk, scale)
+import           Vulkyrie.Utils                (orthogonalVk)
 import           Vulkyrie.Vulkan.Command
 import           Vulkyrie.Vulkan.Default.Pipeline
 import           Vulkyrie.Vulkan.Default.RenderPass
 import           Vulkyrie.Vulkan.Descriptor
-import           Vulkyrie.Vulkan.Device
 import           Vulkyrie.Vulkan.Engine
 import           Vulkyrie.Vulkan.Framebuffer
 import           Vulkyrie.Vulkan.Image
@@ -100,7 +98,7 @@ loadAssets :: EngineCapability -> VkDescriptorSetLayout -> Resource Assets
 loadAssets cap@EngineCapability { dev, descriptorPool } materialDSL = Resource $ do
   let texturePaths = map ("textures/" ++) ["spritesforyou.png"]
   (textureReadyEvents, descrTextureInfos) <- unzip <$> mapM
-    (auto . createTextureInfo cap True) texturePaths
+    (auto . createTextureFromFile cap True) texturePaths
 
   loadEvents <- newMVar textureReadyEvents
 
@@ -217,7 +215,7 @@ myAppNewWindow eventChan window = Resource $ do
   return WindowState {..}
 
 myAppMainThreadHook :: WindowState -> IO ()
-myAppMainThreadHook WindowState {..} = return ()
+myAppMainThreadHook WindowState {} = return ()
 
 myAppStart :: MVar ViewModel -> MVar ViewState -> WindowState -> EngineCapability -> Resource MyAppState
 myAppStart viewModel viewState winState cap@EngineCapability{ dev, queueFam } = Resource $ do
@@ -355,10 +353,10 @@ recordFrame MyAppState{..} cmdBufs = do
         nWalls :: Float = fromIntegral $ VS.length walls
         n :: Int = max 1 $ ceiling $ nWalls / nThreads
         wallGroups = groups n walls
-    mapM_ Async.wait <=< forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, walls) ->
+    mapM_ Async.wait <=< forM (zip (VS.toList cmdBufs) wallGroups) $ \(cmdBuf, wallsInGroup) ->
       async $ do
         texPos cmdBuf tileGrid (Vec2 2 4)
-        VS.forM_ walls $ \wallPos -> do
+        VS.forM_ wallsInGroup $ \wallPos -> do
           tilePos cmdBuf wallPos
           recordSprite cmdBuf
 
@@ -405,6 +403,7 @@ data MyAppState
   , renderThreadOwner :: ThreadOwner
   }
 
+maxFramesInFlight :: Int
 maxFramesInFlight = 2
 
 runGraphics :: [EngineFlag] -> Chan Event -> MVar ViewModel -> MVar ViewState -> IO ()
