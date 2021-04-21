@@ -1,0 +1,3 @@
+[submodule "vulkyrie"]
+	path = vulkyrie
+	url = https://github.com/cjay/vulkyrie.git

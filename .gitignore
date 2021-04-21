@@ -1,40 +1,13 @@
-dist/
-profiling/
-dist-*/
-.HTF/
-log/
-.cabal-sandbox/
-.stack-work/
-cabal-dev
-*#
-*.aux
-*.bundle
-*.chi
-*.chs.h
-*.dSYM
-*.dylib
-*.dyn_hi
-*.dyn_o
-*.eventlog
-*.hi
-*.hp
-*.o
-*.a
-*.prof
-*.so
-*~
-.*.swo
-.*.swp
-.DS_Store
-.hpc
-.hsenv
-TAGS
+# Handle ignores for your editor and OS locally:
+# how: https://docs.github.com/en/github/getting-started-with-github/ignoring-files#configuring-ignored-files-for-all-repositories-on-your-computer
+# why: http://stratus3d.com/blog/2018/06/03/stop-excluding-editor-temp-files-in-gitignore/
+
+# haskell
 cabal.project.local
-cabal.sandbox.config
-codex.tags
-docs
-tags
-wiki
-wip
-.ghc.environment.*
-*.spv
+dist
+dist-newstyle
+hie.yaml
+.stack-work
+
+# compiled shaders
+shaders/*.spv
